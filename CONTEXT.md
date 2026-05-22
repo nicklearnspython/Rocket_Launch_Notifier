@@ -12,6 +12,14 @@ _Avoid_: app, bot
 The external source that reports **Launches**, **Launch Times**, **Timing Precision**, and **Launch Statuses**.
 _Avoid_: data source, API
 
+**Launch Schedule Source Contract**:
+The minimum normalized launch facts a **Launch Schedule Source** must provide for the **Watcher** to decide whether to create **Alerts**.
+_Avoid_: provider model, source payload
+
+**Schedule Lookahead**:
+The future time range the **Watcher** considers when deciding whether a **Relevant Launch** is close enough to be considered for an **Alert**.
+_Avoid_: fetch window, planning window
+
 **Launch**:
 A scheduled rocket launch reported by the launch schedule source.
 _Avoid_: event
@@ -44,6 +52,22 @@ _Avoid_: vague planning date, TBD date
 The source-reported readiness or lifecycle state of a **Launch**.
 _Avoid_: status
 
+**Go Launch Status**:
+A **Launch Status** indicating that a **Launch** is eligible for new **Alerts**.
+_Avoid_: active status
+
+**No Go Launch Status**:
+A **Launch Status** indicating that a **Launch** should not receive new countdown or hour-precision **Alerts**, but may need a **Correction Alert** after a prior **Alert**.
+_Avoid_: not go
+
+**Ended Launch Status**:
+A **Launch Status** indicating that a **Launch** has completed or otherwise passed its alertable lifecycle.
+_Avoid_: complete status
+
+**Unknown Launch Status**:
+A **Launch Status** the **Launch Schedule Source** adapter cannot confidently map.
+_Avoid_: unmapped status
+
 **Relevant Launch**:
 A **Launch** whose **Launch Provider** is SpaceX and whose one or more **Searchable Fields** match at least one configured **Include Term**.
 _Avoid_: watched launch, matching launch
@@ -72,6 +96,14 @@ _Avoid_: prompt, reminder
 An **Alert** sent because a **Relevant Launch** is close to a precise launch time.
 _Avoid_: countdown notification
 
+**Launch Soon Alert**:
+A **Countdown Alert** sent because a **Relevant Launch** is near enough that a **Recipient** may want to prepare to open the **Live Feed**.
+_Avoid_: T-minus-30 alert
+
+**Launch Imminent Alert**:
+A **Countdown Alert** sent because a **Relevant Launch** is near enough that a **Recipient** may want to open the **Live Feed** now.
+_Avoid_: T-minus-5 alert
+
 **Hour-Precision Alert**:
 An **Alert** sent because a **Relevant Launch** appears to be within the current hour but does not have precise countdown timing.
 _Avoid_: hour-window alert, launch window alert, hour-precision launch window heads-up
@@ -88,14 +120,28 @@ _Avoid_: alert
 A delivery route used to send **Notifications** to **Recipients**.
 _Avoid_: Pushover
 
+**Notification Delivery Record**:
+A saved record of whether a **Notification Channel** reported that a **Notification** was sent or received for a **Recipient**.
+_Avoid_: alert record, receipt
+
+**Watcher Log**:
+A human-readable record of **Watcher** activity, including **Notification** delivery outcomes.
+_Avoid_: alert record
+
+**Dry Run**:
+A **Watcher** run that evaluates **Launches** normally but sends no **Notifications**, writes no **Alert Records**, and writes no **Watcher Log** entries.
+_Avoid_: test notification
+
 **Alert Record**:
-A saved record of prior **Alerts** and the launch facts they were based on.
+A saved record of prior **Alerts** and the launch facts they were based on, kept so the **Watcher** can avoid duplicate or stale **Alerts**.
 _Avoid_: state, history, memory
 
 ## Relationships
 
 - A **Watcher** observes many **Launches**
+- A **Watcher** uses one **Schedule Lookahead**
 - A **Launch Schedule Source** reports many **Launches**
+- A **Launch Schedule Source** satisfies one **Launch Schedule Source Contract**
 - A **Launch** has exactly one **Launch Provider**
 - A **Relevant Launch** is a **Launch**
 - A **Relevant Launch** matches one or more **Include Terms**
@@ -106,13 +152,20 @@ _Avoid_: state, history, memory
 - A **Precise Launch Time** is a **Launch Time**
 - An **Imprecise Launch Time** is a **Launch Time**
 - A **Launch** has one **Launch Status**
+- A **Go Launch Status**, **No Go Launch Status**, **Ended Launch Status**, or **Unknown Launch Status** is a **Launch Status**
 - An **Alert** concerns exactly one **Relevant Launch**
 - A **Countdown Alert**, **Hour-Precision Alert**, or **Correction Alert** is an **Alert**
+- A **Launch Soon Alert** and **Launch Imminent Alert** are **Countdown Alerts**
 - An **Alert** may prompt a **Recipient** to open a **Live Feed**
 - A **Notification** delivers one **Alert** to one **Recipient**
 - A **Notification** is sent through one **Notification Channel**
+- A **Notification Delivery Record** belongs to one **Notification**
+- A **Notification Delivery Record** concerns one **Recipient**
+- A **Watcher Log** may record many **Notification Delivery Records**
+- A **Dry Run** may identify **Alerts** without creating **Notifications** or **Alert Records**
 - An **Alert Record** belongs to exactly one **Relevant Launch**
 - An **Alert Record** records zero or more prior **Alerts**
+- An **Alert Record** records the named **Alerts** already created for a **Relevant Launch**
 
 ## Example Dialogue
 
@@ -131,3 +184,4 @@ _Avoid_: state, history, memory
 - "net" is launch schedule source vocabulary; resolved: the project term is **Launch Time**.
 - "state" was used for persisted alert behavior data; resolved: **Alert Record** is the saved domain record, not a full launch history.
 - **Launch Window** is domain vocabulary only for now; resolved: v1 alert behavior is based on **Launch Time** and **Timing Precision**, not the formal **Launch Window**.
+- **Relevant Launch** matching is case-insensitive for both **Launch Provider** and **Include Terms** in v1.

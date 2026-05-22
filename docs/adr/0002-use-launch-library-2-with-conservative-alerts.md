@@ -20,6 +20,8 @@ Use conservative countdown alerts:
 - Send a softer hour-window heads-up when timing precision is hour-level and the launch is within the current hour.
 - Stay silent for day, month, year, TBD, or otherwise vague dates.
 - After any prior alert for a launch, send corrections for material time, status, or precision changes.
+- Treat a correction as material when the launch status changes from go to no go, timing precision changes from precise to imprecise, or the launch time moves enough that a recipient who already got a countdown alert would likely need to re-check the live feed.
+- Do not send correction alerts for ended or unknown launch statuses in v1.
 - Send no notification when the watcher cannot reach or parse the data source.
 
 ## Consequences
