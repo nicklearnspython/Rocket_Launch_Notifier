@@ -1,0 +1,23 @@
+[watcher]
+launch_provider = "SpaceX"
+include_terms = ["Vandenberg", "Starbase", "Boca Chica", "Starship"]
+display_timezone = "America/Los_Angeles"
+poll_interval_seconds = 300
+retention_days = 30
+
+[launch_schedule_source]
+name = "launch-library-2"
+
+[alert_policy]
+launch_soon_minutes_before = 30
+launch_imminent_minutes_before = 5
+hour_precision_window_minutes = 60
+correction_threshold_minutes = 10
+
+[notification_channel]
+type = "pushover"
+app_token_env = "PUSHOVER_APP_TOKEN"
+
+[[recipients]]
+name = "Nick"
+user_key_env = "PUSHOVER_USER_KEY_NICK"
