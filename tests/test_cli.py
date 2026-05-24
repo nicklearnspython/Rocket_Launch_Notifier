@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import io
 import os
 import tempfile
@@ -9,8 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from spacex_launch_watcher.cli import build_parser, main
-from spacex_launch_watcher.watcher import DeliveryFailure, SourceFailure
-
+from spacex_launch_watcher.watcher import (
+    DeliveryFailure,
+    Launch,
+    LaunchScheduleResult,
+    SourceFailure,
+)
 
 class CliTests(unittest.TestCase):
     def test_config_can_be_provided_before_the_command(self) -> None:
@@ -141,7 +146,21 @@ user_key_env = "PUSHOVER_USER_KEY_NICK"
                     "PUSHOVER_APP_TOKEN": "unused-fake-channel",
                     "PUSHOVER_USER_KEY_NICK": "unused-fake-channel",
                 },
-            ), redirect_stdout(output):
+            ), patch(
+                "spacex_launch_watcher.cli.LaunchLibrary2LaunchScheduleSource"
+            ) as source_class, redirect_stdout(output):
+                source_class.return_value.fetch_launches.return_value = LaunchScheduleResult(
+                    launches=(
+                        Launch(
+                            name="Starship Flight Test",
+                            provider="SpaceX",
+                            launch_time=datetime.now(UTC) + timedelta(minutes=20),
+                            mission_name="Starship Integrated Flight Test",
+                            source_name="launch-library-2",
+                            source_launch_id="starship-flight-test",
+                        ),
+                    )
+                )
                 exit_code = main(
                     [
                         "--config",
@@ -157,12 +176,16 @@ user_key_env = "PUSHOVER_USER_KEY_NICK"
             text = output.getvalue()
             self.assertIn("Created 1 Alert(s).", text)
             self.assertIn("Delivered 1 fake Notification(s).", text)
+            source_class.assert_called_once_with(schedule_lookahead_hours=30)
 
     def test_once_prints_source_failure_and_exits_nonzero(self) -> None:
         output = io.StringIO()
 
         with patch(
             "spacex_launch_watcher.cli.load_config",
+            return_value=object(),
+        ), patch(
+            "spacex_launch_watcher.cli._launch_library_2_source",
             return_value=object(),
         ), patch(
             "spacex_launch_watcher.cli.run_watcher_cycle",
@@ -199,6 +222,9 @@ user_key_env = "PUSHOVER_USER_KEY_NICK"
 
         with patch(
             "spacex_launch_watcher.cli.load_config",
+            return_value=object(),
+        ), patch(
+            "spacex_launch_watcher.cli._launch_library_2_source",
             return_value=object(),
         ), patch(
             "spacex_launch_watcher.cli.run_watcher_cycle",

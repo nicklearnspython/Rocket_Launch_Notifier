@@ -66,6 +66,7 @@ class DecisionResult:
 class LaunchScheduleResult:
     launches: tuple[Launch, ...]
     warnings: tuple[str, ...] = ()
+    fetched_at: datetime | None = None
 
 
 class SourceFailure(RuntimeError):

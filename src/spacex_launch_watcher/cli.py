@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from spacex_launch_watcher.config import ConfigError, load_config
+from spacex_launch_watcher.config import ConfigError, WatcherConfig, load_config
+from spacex_launch_watcher.launch_library_2 import LaunchLibrary2LaunchScheduleSource
 from spacex_launch_watcher.watcher import (
     DeliveryFailure,
     FakeNotificationChannel,
@@ -81,11 +82,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     elif args.command == "once":
         notification_channel = FakeNotificationChannel()
+        launch_schedule_source = _launch_library_2_source(config)
         try:
             decision = run_watcher_cycle(
                 config=config,
                 alert_records_path=Path(args.alert_records),
                 watcher_log_path=Path(args.watcher_log),
+                launch_schedule_source=launch_schedule_source,
                 notification_channel=notification_channel,
             )
         except SourceFailure as error:
@@ -104,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             alert_records_path=Path(args.alert_records),
             watcher_log_path=Path(args.watcher_log),
+            launch_schedule_source=_launch_library_2_source(config),
             max_polls=args.max_polls,
         )
     else:
@@ -112,3 +116,9 @@ def main(argv: list[str] | None = None) -> int:
             f"{config.watcher.launch_provider} with {len(config.recipients)} recipient(s)."
         )
     return 0
+
+
+def _launch_library_2_source(config: WatcherConfig) -> LaunchLibrary2LaunchScheduleSource:
+    return LaunchLibrary2LaunchScheduleSource(
+        schedule_lookahead_hours=config.watcher.schedule_lookahead_hours
+    )
