@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import io
+import os
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
 
-from spacex_launch_watcher.cli import build_parser
+from spacex_launch_watcher.cli import build_parser, main
 
 
 class CliTests(unittest.TestCase):
@@ -17,6 +23,50 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(args.command, "once")
         self.assertEqual(args.config, "local.toml")
+
+    def test_once_dry_run_prints_candidate_launch_soon_alert(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                """
+[watcher]
+launch_provider = "SpaceX"
+include_terms = ["Starship"]
+
+[alert_policy]
+launch_soon_minutes_before = 30
+launch_imminent_minutes_before = 5
+
+[notification_channel]
+type = "pushover"
+app_token_env = "PUSHOVER_APP_TOKEN"
+
+[[recipients]]
+name = "Nick"
+user_key_env = "PUSHOVER_USER_KEY_NICK"
+""",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+
+            with patch.dict(
+                os.environ,
+                {
+                    "PUSHOVER_APP_TOKEN": "unused-in-dry-run",
+                    "PUSHOVER_USER_KEY_NICK": "unused-in-dry-run",
+                },
+            ), redirect_stdout(output):
+                exit_code = main(["--config", str(config_path), "once", "--dry-run"])
+
+        self.assertEqual(exit_code, 0)
+        text = output.getvalue()
+        self.assertIn("Dry Run", text)
+        self.assertIn("Launch Soon Alert", text)
+        self.assertIn("Starship Flight Test", text)
+        self.assertIn("would send", text)
+        self.assertIn("Nick", text)
+        self.assertNotIn("Notification sent", text)
+        self.assertNotIn("Watcher Log written", text)
 
 
 if __name__ == "__main__":
