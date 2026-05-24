@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import os
+import time
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+from zoneinfo import ZoneInfo
 
 from spacex_launch_watcher.config import WatcherConfig
 
@@ -60,6 +62,27 @@ class DecisionResult:
     alert_records: dict[str, AlertRecord]
 
 
+@dataclass(frozen=True)
+class LaunchScheduleResult:
+    launches: tuple[Launch, ...]
+    warnings: tuple[str, ...] = ()
+
+
+class SourceFailure(RuntimeError):
+    pass
+
+
+class DeliveryFailure(RuntimeError):
+    def __init__(self, failures: tuple[str, ...]) -> None:
+        self.failures = failures
+        super().__init__("Notification delivery failed for: " + ", ".join(failures))
+
+
+class LaunchScheduleSource(Protocol):
+    def fetch_launches(self, now: datetime) -> LaunchScheduleResult:
+        pass
+
+
 class NotificationChannel(Protocol):
     def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
         pass
@@ -71,6 +94,11 @@ class FakeNotificationChannel:
 
     def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
         self.deliveries.append((alert_name, recipient_name))
+
+
+class FakeLaunchScheduleSource:
+    def fetch_launches(self, now: datetime) -> LaunchScheduleResult:
+        return LaunchScheduleResult(launches=_fake_launches(now))
 
 
 def evaluate_alerts(
@@ -174,12 +202,33 @@ def run_watcher_cycle(
     *,
     config: WatcherConfig,
     alert_records_path: Path,
+    watcher_log_path: Path | None = None,
     launches: tuple[Launch, ...] | None = None,
+    launch_schedule_source: LaunchScheduleSource | None = None,
     notification_channel: NotificationChannel | None = None,
     now: datetime | None = None,
 ) -> DecisionResult:
     now = datetime.now(UTC) if now is None else now.astimezone(UTC)
-    launches = _fake_launches(now) if launches is None else launches
+    if launches is not None:
+        source_result = LaunchScheduleResult(launches=launches)
+    else:
+        launch_schedule_source = (
+            FakeLaunchScheduleSource()
+            if launch_schedule_source is None
+            else launch_schedule_source
+        )
+        try:
+            source_result = launch_schedule_source.fetch_launches(now)
+        except SourceFailure as error:
+            if watcher_log_path is not None:
+                append_watcher_log(
+                    watcher_log_path,
+                    [
+                        f"Launch Schedule Source failure: {error} "
+                        f"({_display_run_time(now, config.watcher.display_timezone)})"
+                    ],
+                )
+            raise
     notification_channel = (
         FakeNotificationChannel()
         if notification_channel is None
@@ -192,15 +241,40 @@ def run_watcher_cycle(
         now=now,
     )
     decision = evaluate_alerts(
-        launches=launches,
+        launches=source_result.launches,
         alert_records=existing_records,
         config=config,
         now=now,
     )
 
-    if decision.alerts or decision.alert_records != existing_records:
-        save_alert_records(alert_records_path, decision.alert_records)
+    log_entries: list[str] = [
+        f"Launch Schedule Source warning: {warning} "
+        f"({_display_run_time(now, config.watcher.display_timezone)})"
+        for warning in source_result.warnings
+    ]
 
+    if decision.alerts or decision.alert_records != existing_records:
+        try:
+            save_alert_records(alert_records_path, decision.alert_records)
+        except OSError as error:
+            if watcher_log_path is not None:
+                append_watcher_log(
+                    watcher_log_path,
+                    [
+                        "Watcher failure: could not write Alert Records: "
+                        f"{error} "
+                        f"({_display_run_time(now, config.watcher.display_timezone)})"
+                    ],
+                )
+            raise
+
+    for alert in decision.alerts:
+        log_entries.append(
+            f"Created Alert: {alert.name} for {alert.launch.name} "
+            f"({_display_run_time(now, config.watcher.display_timezone)})"
+        )
+
+    delivery_failures: list[str] = []
     for alert in decision.alerts:
         from spacex_launch_watcher.notifications import format_alert
 
@@ -208,17 +282,52 @@ def run_watcher_cycle(
             alert, display_timezone=config.watcher.display_timezone
         )
         for recipient in config.recipients:
-            notification_channel.deliver(alert.name, recipient.name, notification.body)
+            try:
+                notification_channel.deliver(
+                    alert.name, recipient.name, notification.body
+                )
+            except Exception as error:
+                delivery_failures.append(f"{alert.name} to {recipient.name}")
+                log_entries.append(
+                    f"Notification failed: {alert.name} to {recipient.name}: {error}"
+                )
+            else:
+                log_entries.append(
+                    f"Notification delivered: {alert.name} to {recipient.name}"
+                )
+
+    if watcher_log_path is not None and log_entries:
+        append_watcher_log(watcher_log_path, log_entries)
+
+    if delivery_failures:
+        raise DeliveryFailure(tuple(delivery_failures))
 
     return decision
 
 
-def run_dry_watcher_cycle(config: WatcherConfig, now: datetime | None = None) -> str:
+def append_watcher_log(path: Path, entries: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        for entry in entries:
+            file.write(f"{entry}\n")
+
+
+def run_dry_watcher_cycle(
+    config: WatcherConfig,
+    now: datetime | None = None,
+    launch_schedule_source: LaunchScheduleSource | None = None,
+) -> str:
     from spacex_launch_watcher.notifications import format_alert
 
     now = datetime.now(UTC) if now is None else now
+    launch_schedule_source = (
+        FakeLaunchScheduleSource()
+        if launch_schedule_source is None
+        else launch_schedule_source
+    )
+    source_result = launch_schedule_source.fetch_launches(now)
     decision = evaluate_alerts(
-        launches=_fake_launches(now),
+        launches=source_result.launches,
         alert_records={},
         config=config,
         now=now,
@@ -240,6 +349,41 @@ def run_dry_watcher_cycle(config: WatcherConfig, now: datetime | None = None) ->
     lines.append("No Alert Records written.")
     lines.append("No Watcher Log entries written.")
     return "\n".join(lines)
+
+
+def run_watch(
+    *,
+    config: WatcherConfig,
+    alert_records_path: Path,
+    watcher_log_path: Path,
+    launch_schedule_source: LaunchScheduleSource | None = None,
+    notification_channel: NotificationChannel | None = None,
+    now: Callable[[], datetime] | None = None,
+    max_polls: int | None = None,
+    sleep: Callable[[int], None] = time.sleep,
+) -> None:
+    launch_schedule_source = (
+        FakeLaunchScheduleSource()
+        if launch_schedule_source is None
+        else launch_schedule_source
+    )
+    poll_count = 0
+    while max_polls is None or poll_count < max_polls:
+        poll_count += 1
+        current_time = datetime.now(UTC) if now is None else now()
+        try:
+            run_watcher_cycle(
+                config=config,
+                alert_records_path=alert_records_path,
+                watcher_log_path=watcher_log_path,
+                launch_schedule_source=launch_schedule_source,
+                notification_channel=notification_channel,
+                now=current_time,
+            )
+        except SourceFailure:
+            pass
+        if max_polls is None or poll_count < max_polls:
+            sleep(config.watcher.poll_interval_seconds)
 
 
 def is_relevant_launch(
@@ -498,6 +642,14 @@ def _datetime_from_json(value: str | None) -> datetime | None:
     if value is None:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def _display_run_time(value: datetime, display_timezone: str) -> str:
+    display = value.astimezone(ZoneInfo(display_timezone))
+    return (
+        f"UTC {value:%Y-%m-%d %H:%M}; "
+        f"{display_timezone} {display:%Y-%m-%d %H:%M}"
+    )
 
 
 def _matched_include_terms(

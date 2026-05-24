@@ -9,13 +9,18 @@ from unittest.mock import patch
 from spacex_launch_watcher.config import parse_config
 from spacex_launch_watcher.watcher import (
     AlertRecord,
+    DeliveryFailure,
+    LaunchScheduleResult,
     Launch,
     LaunchSnapshot,
+    SourceFailure,
     evaluate_alerts,
     is_relevant_launch,
     load_alert_records,
     prune_alert_records,
     run_watcher_cycle,
+    run_dry_watcher_cycle,
+    run_watch,
     save_alert_records,
 )
 
@@ -136,6 +141,69 @@ class RecordingNotificationChannel:
 
     def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
         self.deliveries.append((alert_name, recipient_name, message))
+
+
+class FailingForNickNotificationChannel:
+    def __init__(self) -> None:
+        self.attempts: list[tuple[str, str]] = []
+
+    def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
+        self.attempts.append((alert_name, recipient_name))
+        if recipient_name == "Nick":
+            raise RuntimeError("Pushover rejected Nick")
+
+
+class FailingLaunchScheduleSource:
+    def fetch_launches(self, now: datetime) -> LaunchScheduleResult:
+        raise SourceFailure("Launch Library 2 unavailable")
+
+
+class WarningLaunchScheduleSource:
+    def fetch_launches(self, now: datetime) -> LaunchScheduleResult:
+        return LaunchScheduleResult(
+            launches=(launch(),),
+            warnings=("Launch Library 2 returned one unmapped status",),
+        )
+
+
+class FailingThenSuccessfulLaunchScheduleSource:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch_launches(self, now: datetime) -> LaunchScheduleResult:
+        self.calls += 1
+        if self.calls == 1:
+            raise SourceFailure("temporary source outage")
+        return LaunchScheduleResult(launches=())
+
+
+def watcher_config_with_recipients(names: tuple[str, ...]):
+    raw_config = {
+        "watcher": {
+            "launch_provider": "SpaceX",
+            "include_terms": ["Starship", "Vandenberg"],
+        },
+        "alert_policy": {
+            "launch_soon_minutes_before": 30,
+            "launch_imminent_minutes_before": 5,
+            "hour_precision_window_minutes": 60,
+            "correction_threshold_minutes": 30,
+        },
+        "notification_channel": {
+            "type": "pushover",
+            "app_token_env": "PUSHOVER_APP_TOKEN",
+        },
+        "recipients": [
+            {
+                "name": name,
+                "user_key_env": f"PUSHOVER_USER_KEY_{name.upper()}",
+            }
+            for name in names
+        ],
+    }
+    env = {"PUSHOVER_APP_TOKEN": "app-token"}
+    env.update({f"PUSHOVER_USER_KEY_{name.upper()}": "user-key" for name in names})
+    return parse_config(raw_config, env)
 
 
 class WatcherTests(unittest.TestCase):
@@ -270,6 +338,160 @@ class WatcherTests(unittest.TestCase):
                     )
 
             self.assertEqual(notification_channel.deliveries, [])
+
+    def test_watcher_cycle_logs_storage_failure_before_raising(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            watcher_log_path = Path(temp_dir) / "watcher.log"
+            notification_channel = RecordingNotificationChannel()
+
+            with patch(
+                "spacex_launch_watcher.watcher.save_alert_records",
+                side_effect=OSError("disk full"),
+            ):
+                with self.assertRaises(OSError):
+                    run_watcher_cycle(
+                        config=watcher_config(),
+                        alert_records_path=records_path,
+                        watcher_log_path=watcher_log_path,
+                        launches=(launch(),),
+                        notification_channel=notification_channel,
+                        now=NOW,
+                    )
+
+            self.assertEqual(notification_channel.deliveries, [])
+            watcher_log = watcher_log_path.read_text(encoding="utf-8")
+            self.assertIn(
+                "Watcher failure: could not write Alert Records: disk full",
+                watcher_log,
+            )
+            self.assertIn("UTC 2026-05-24 12:00", watcher_log)
+
+    def test_watcher_cycle_attempts_all_recipients_and_keeps_saved_record_when_delivery_fails(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            watcher_log_path = Path(temp_dir) / "watcher.log"
+            notification_channel = FailingForNickNotificationChannel()
+
+            with self.assertRaises(DeliveryFailure):
+                run_watcher_cycle(
+                    config=watcher_config_with_recipients(("Nick", "Sam")),
+                    alert_records_path=records_path,
+                    watcher_log_path=watcher_log_path,
+                    launches=(launch(),),
+                    notification_channel=notification_channel,
+                    now=NOW,
+                )
+
+            self.assertEqual(
+                notification_channel.attempts,
+                [
+                    ("Launch Soon Alert", "Nick"),
+                    ("Launch Soon Alert", "Sam"),
+                ],
+            )
+            self.assertIn(
+                "launch-library-2:starship-flight-10",
+                load_alert_records(records_path),
+            )
+            watcher_log = watcher_log_path.read_text(encoding="utf-8")
+            self.assertIn(
+                "Created Alert: Launch Soon Alert for Starship Flight Test",
+                watcher_log,
+            )
+            self.assertIn("UTC 2026-05-24 12:00", watcher_log)
+            self.assertIn("America/Los_Angeles 2026-05-24 05:00", watcher_log)
+            self.assertIn("Notification failed: Launch Soon Alert to Nick", watcher_log)
+            self.assertIn("Pushover rejected Nick", watcher_log)
+            self.assertIn("Notification delivered: Launch Soon Alert to Sam", watcher_log)
+
+    def test_watcher_cycle_logs_source_failure_and_raises_before_writing_records(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            watcher_log_path = Path(temp_dir) / "watcher.log"
+
+            with self.assertRaises(SourceFailure):
+                run_watcher_cycle(
+                    config=watcher_config(),
+                    alert_records_path=records_path,
+                    watcher_log_path=watcher_log_path,
+                    launch_schedule_source=FailingLaunchScheduleSource(),
+                    notification_channel=RecordingNotificationChannel(),
+                    now=NOW,
+                )
+
+            self.assertFalse(records_path.exists())
+            watcher_log = watcher_log_path.read_text(encoding="utf-8")
+            self.assertIn(
+                "Launch Schedule Source failure: Launch Library 2 unavailable",
+                watcher_log,
+            )
+            self.assertIn("UTC 2026-05-24 12:00", watcher_log)
+            self.assertIn("America/Los_Angeles 2026-05-24 05:00", watcher_log)
+
+    def test_watcher_cycle_logs_source_warnings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            watcher_log_path = Path(temp_dir) / "watcher.log"
+
+            run_watcher_cycle(
+                config=watcher_config(),
+                alert_records_path=records_path,
+                watcher_log_path=watcher_log_path,
+                launch_schedule_source=WarningLaunchScheduleSource(),
+                notification_channel=RecordingNotificationChannel(),
+                now=NOW,
+            )
+
+            watcher_log = watcher_log_path.read_text(encoding="utf-8")
+            self.assertIn(
+                "Launch Schedule Source warning: Launch Library 2 returned one unmapped status",
+                watcher_log,
+            )
+
+    def test_dry_run_raises_source_failure_without_watcher_log_or_alert_records(
+        self,
+    ) -> None:
+        with self.assertRaises(SourceFailure):
+            run_dry_watcher_cycle(
+                watcher_config(),
+                launch_schedule_source=FailingLaunchScheduleSource(),
+                now=NOW,
+            )
+
+    def test_watch_logs_source_failure_and_continues_to_next_poll(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            watcher_log_path = Path(temp_dir) / "watcher.log"
+            source = FailingThenSuccessfulLaunchScheduleSource()
+
+            run_watch(
+                config=watcher_config(),
+                alert_records_path=records_path,
+                watcher_log_path=watcher_log_path,
+                launch_schedule_source=source,
+                notification_channel=RecordingNotificationChannel(),
+                now=lambda: NOW,
+                max_polls=2,
+                sleep=lambda seconds: None,
+            )
+
+            self.assertEqual(source.calls, 2)
+            watcher_log = watcher_log_path.read_text(encoding="utf-8")
+            self.assertIn(
+                "Launch Schedule Source failure: temporary source outage",
+                watcher_log,
+            )
 
     def test_precise_go_launch_inside_launch_soon_threshold_creates_alert_and_record(
         self,

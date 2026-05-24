@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from spacex_launch_watcher.cli import build_parser, main
+from spacex_launch_watcher.watcher import DeliveryFailure, SourceFailure
 
 
 class CliTests(unittest.TestCase):
@@ -156,6 +157,57 @@ user_key_env = "PUSHOVER_USER_KEY_NICK"
             text = output.getvalue()
             self.assertIn("Created 1 Alert(s).", text)
             self.assertIn("Delivered 1 fake Notification(s).", text)
+
+    def test_once_prints_source_failure_and_exits_nonzero(self) -> None:
+        output = io.StringIO()
+
+        with patch(
+            "spacex_launch_watcher.cli.load_config",
+            return_value=object(),
+        ), patch(
+            "spacex_launch_watcher.cli.run_watcher_cycle",
+            side_effect=SourceFailure("Launch Library 2 unavailable"),
+        ), redirect_stdout(output):
+            exit_code = main(["once"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "Launch Schedule Source failure: Launch Library 2 unavailable",
+            output.getvalue(),
+        )
+
+    def test_once_dry_run_prints_source_failure_and_exits_nonzero(self) -> None:
+        output = io.StringIO()
+
+        with patch(
+            "spacex_launch_watcher.cli.load_config",
+            return_value=object(),
+        ), patch(
+            "spacex_launch_watcher.cli.run_dry_watcher_cycle",
+            side_effect=SourceFailure("Launch Library 2 unavailable"),
+        ), redirect_stdout(output):
+            exit_code = main(["once", "--dry-run"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "Launch Schedule Source failure: Launch Library 2 unavailable",
+            output.getvalue(),
+        )
+
+    def test_once_prints_delivery_failure_and_exits_nonzero(self) -> None:
+        output = io.StringIO()
+
+        with patch(
+            "spacex_launch_watcher.cli.load_config",
+            return_value=object(),
+        ), patch(
+            "spacex_launch_watcher.cli.run_watcher_cycle",
+            side_effect=DeliveryFailure(("Launch Soon Alert to Nick",)),
+        ), redirect_stdout(output):
+            exit_code = main(["once"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Notification delivery failed", output.getvalue())
 
 
 if __name__ == "__main__":
