@@ -10,6 +10,7 @@ from spacex_launch_watcher.config import (
     DEFAULT_LAUNCH_SOON_MINUTES,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_RETENTION_DAYS,
+    DEFAULT_SCHEDULE_LOOKAHEAD_HOURS,
     DEFAULT_SOURCE_NAME,
     ConfigError,
     parse_config,
@@ -51,6 +52,9 @@ class ConfigTests(unittest.TestCase):
             config.watcher.poll_interval_seconds, DEFAULT_POLL_INTERVAL_SECONDS
         )
         self.assertEqual(config.watcher.retention_days, DEFAULT_RETENTION_DAYS)
+        self.assertEqual(
+            config.watcher.schedule_lookahead_hours, DEFAULT_SCHEDULE_LOOKAHEAD_HOURS
+        )
         self.assertEqual(config.launch_schedule_source.name, DEFAULT_SOURCE_NAME)
         self.assertEqual(
             config.alert_policy.launch_soon_minutes_before,

@@ -68,6 +68,45 @@ user_key_env = "PUSHOVER_USER_KEY_NICK"
         self.assertNotIn("Notification sent", text)
         self.assertNotIn("Watcher Log written", text)
 
+    def test_once_dry_run_uses_imminent_threshold_for_fake_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                """
+[watcher]
+launch_provider = "SpaceX"
+include_terms = ["Starship"]
+
+[alert_policy]
+launch_soon_minutes_before = 60
+launch_imminent_minutes_before = 50
+
+[notification_channel]
+type = "pushover"
+app_token_env = "PUSHOVER_APP_TOKEN"
+
+[[recipients]]
+name = "Nick"
+user_key_env = "PUSHOVER_USER_KEY_NICK"
+""",
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+
+            with patch.dict(
+                os.environ,
+                {
+                    "PUSHOVER_APP_TOKEN": "unused-in-dry-run",
+                    "PUSHOVER_USER_KEY_NICK": "unused-in-dry-run",
+                },
+            ), redirect_stdout(output):
+                exit_code = main(["--config", str(config_path), "once", "--dry-run"])
+
+        self.assertEqual(exit_code, 0)
+        text = output.getvalue()
+        self.assertIn("Candidate Alert: Launch Imminent Alert", text)
+        self.assertNotIn("Candidate Alert: Launch Soon Alert", text)
+
 
 if __name__ == "__main__":
     unittest.main()

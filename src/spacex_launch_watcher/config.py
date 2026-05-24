@@ -17,6 +17,7 @@ DEFAULT_HOUR_PRECISION_WINDOW_MINUTES = 60
 DEFAULT_CORRECTION_THRESHOLD_MINUTES = 10
 DEFAULT_POLL_INTERVAL_SECONDS = 300
 DEFAULT_RETENTION_DAYS = 30
+DEFAULT_SCHEDULE_LOOKAHEAD_HOURS = 30
 
 
 class ConfigError(ValueError):
@@ -37,6 +38,7 @@ class WatcherSettings:
     display_timezone: str
     poll_interval_seconds: int
     retention_days: int
+    schedule_lookahead_hours: int
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,13 @@ def parse_config(raw_config: Mapping[str, Any], env: Mapping[str, str]) -> Watch
     retention_days = _positive_int(
         watcher_raw, "retention_days", DEFAULT_RETENTION_DAYS, "retention", errors
     )
+    schedule_lookahead_hours = _positive_int(
+        watcher_raw,
+        "schedule_lookahead_hours",
+        DEFAULT_SCHEDULE_LOOKAHEAD_HOURS,
+        "Schedule Lookahead",
+        errors,
+    )
 
     source_name = _optional_non_empty_string(
         source_raw, "name", DEFAULT_SOURCE_NAME, "Launch Schedule Source", errors
@@ -184,6 +193,7 @@ def parse_config(raw_config: Mapping[str, Any], env: Mapping[str, str]) -> Watch
             display_timezone=display_timezone,
             poll_interval_seconds=poll_interval_seconds,
             retention_days=retention_days,
+            schedule_lookahead_hours=schedule_lookahead_hours,
         ),
         launch_schedule_source=LaunchScheduleSourceSettings(name=source_name),
         alert_policy=AlertPolicySettings(
