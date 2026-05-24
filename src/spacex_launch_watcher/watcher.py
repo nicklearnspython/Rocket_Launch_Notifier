@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import json
+import os
+from pathlib import Path
+from typing import Any, Protocol
 
 from spacex_launch_watcher.config import WatcherConfig
 
@@ -42,16 +46,31 @@ class AlertRecord:
     launch_key: str
     source_name: str
     source_launch_id: str
+    launch_name: str
+    launch_provider: str
     created_alert_names: tuple[str, ...]
     previous_launch: LaunchSnapshot
     matched_include_terms: tuple[str, ...]
-    updated_at: datetime
+    last_alert_created_at: datetime
 
 
 @dataclass(frozen=True)
 class DecisionResult:
     alerts: tuple[Alert, ...]
     alert_records: dict[str, AlertRecord]
+
+
+class NotificationChannel(Protocol):
+    def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
+        pass
+
+
+class FakeNotificationChannel:
+    def __init__(self) -> None:
+        self.deliveries: list[tuple[str, str]] = []
+
+    def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
+        self.deliveries.append((alert_name, recipient_name))
 
 
 def evaluate_alerts(
@@ -111,6 +130,82 @@ def evaluate_alerts(
         )
 
     return DecisionResult(alerts=tuple(alerts), alert_records=updated_records)
+
+
+def load_alert_records(path: Path) -> dict[str, AlertRecord]:
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    records = raw.get("alert_records", [])
+    return {
+        record.launch_key: record
+        for record in (_alert_record_from_json(item) for item in records)
+    }
+
+
+def save_alert_records(path: Path, alert_records: dict[str, AlertRecord]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.tmp")
+    payload = {
+        "alert_records": [
+            _alert_record_to_json(record)
+            for record in sorted(alert_records.values(), key=lambda item: item.launch_key)
+        ]
+    }
+    temp_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temp_path, path)
+
+
+def prune_alert_records(
+    alert_records: dict[str, AlertRecord], *, retention_days: int, now: datetime
+) -> dict[str, AlertRecord]:
+    cutoff = now - timedelta(days=retention_days)
+    return {
+        launch_key: record
+        for launch_key, record in alert_records.items()
+        if record.last_alert_created_at >= cutoff
+    }
+
+
+def run_watcher_cycle(
+    *,
+    config: WatcherConfig,
+    alert_records_path: Path,
+    launches: tuple[Launch, ...] | None = None,
+    notification_channel: NotificationChannel | None = None,
+    now: datetime | None = None,
+) -> DecisionResult:
+    now = datetime.now(UTC) if now is None else now.astimezone(UTC)
+    launches = _fake_launches(now) if launches is None else launches
+    notification_channel = (
+        FakeNotificationChannel()
+        if notification_channel is None
+        else notification_channel
+    )
+
+    existing_records = prune_alert_records(
+        load_alert_records(alert_records_path),
+        retention_days=config.watcher.retention_days,
+        now=now,
+    )
+    decision = evaluate_alerts(
+        launches=launches,
+        alert_records=existing_records,
+        config=config,
+        now=now,
+    )
+
+    if decision.alerts or decision.alert_records != existing_records:
+        save_alert_records(alert_records_path, decision.alert_records)
+
+    for alert in decision.alerts:
+        for recipient in config.recipients:
+            notification_channel.deliver(alert.name, recipient.name, alert.message)
+
+    return decision
 
 
 def run_dry_watcher_cycle(config: WatcherConfig, now: datetime | None = None) -> str:
@@ -333,13 +428,66 @@ def _updated_record(
         launch_key=_launch_key(launch),
         source_name=launch.source_name,
         source_launch_id=launch.source_launch_id or launch.name,
+        launch_name=launch.name,
+        launch_provider=launch.provider,
         created_alert_names=created_alert_names + (alert.name,),
         previous_launch=_snapshot(launch),
         matched_include_terms=_matched_include_terms(
             launch, include_terms=config.watcher.include_terms
         ),
-        updated_at=now,
+        last_alert_created_at=now,
     )
+
+
+def _alert_record_to_json(record: AlertRecord) -> dict[str, Any]:
+    return {
+        "launch_key": record.launch_key,
+        "source_name": record.source_name,
+        "source_launch_id": record.source_launch_id,
+        "launch_name": record.launch_name,
+        "launch_provider": record.launch_provider,
+        "created_alert_names": list(record.created_alert_names),
+        "previous_launch": {
+            "name": record.previous_launch.name,
+            "launch_time": _datetime_to_json(record.previous_launch.launch_time),
+            "timing_precision": record.previous_launch.timing_precision,
+            "launch_status": record.previous_launch.launch_status,
+        },
+        "matched_include_terms": list(record.matched_include_terms),
+        "last_alert_created_at": _datetime_to_json(record.last_alert_created_at),
+    }
+
+
+def _alert_record_from_json(raw: dict[str, Any]) -> AlertRecord:
+    previous_launch = raw["previous_launch"]
+    return AlertRecord(
+        launch_key=raw["launch_key"],
+        source_name=raw["source_name"],
+        source_launch_id=raw["source_launch_id"],
+        launch_name=raw["launch_name"],
+        launch_provider=raw["launch_provider"],
+        created_alert_names=tuple(raw["created_alert_names"]),
+        previous_launch=LaunchSnapshot(
+            name=previous_launch["name"],
+            launch_time=_datetime_from_json(previous_launch["launch_time"]),
+            timing_precision=previous_launch["timing_precision"],
+            launch_status=previous_launch["launch_status"],
+        ),
+        matched_include_terms=tuple(raw["matched_include_terms"]),
+        last_alert_created_at=_datetime_from_json(raw["last_alert_created_at"]),
+    )
+
+
+def _datetime_to_json(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _datetime_from_json(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
 def _matched_include_terms(

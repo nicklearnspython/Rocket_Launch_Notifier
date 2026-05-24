@@ -12,7 +12,7 @@ The project needs reliable personal notifications for selected SpaceX launches. 
 
 Build v1 as a small Python watcher service packaged with Docker.
 
-The service should keep runtime state in a bind-mounted `data/` directory and read secrets from `.env`.
+The service should keep runtime output in a bind-mounted `logs/` directory and read secrets from `.env`.
 
 The service should provide three commands:
 
@@ -22,6 +22,6 @@ The service should provide three commands:
 
 ## Consequences
 
-The implementation can stay small and testable. Moving between hosts should be simple because runtime-specific details live in `.env` and `data/`.
+The implementation can stay small and testable. Moving between hosts should be simple because runtime-specific details live in `.env` and `logs/`.
 
 The project should avoid native mobile app work and broad UI work until the watcher has proven useful.

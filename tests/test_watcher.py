@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from spacex_launch_watcher.config import parse_config
 from spacex_launch_watcher.watcher import (
+    AlertRecord,
     Launch,
     LaunchSnapshot,
     evaluate_alerts,
     is_relevant_launch,
+    load_alert_records,
+    prune_alert_records,
+    run_watcher_cycle,
+    save_alert_records,
 )
 
 
@@ -99,7 +107,163 @@ def launch(
     )
 
 
+def alert_record(
+    *,
+    launch_key: str = "launch-library-2:starship-flight-10",
+    last_alert_created_at: datetime,
+) -> AlertRecord:
+    return AlertRecord(
+        launch_key=launch_key,
+        source_name="launch-library-2",
+        source_launch_id=launch_key.split(":", 1)[1],
+        launch_name="Starship Flight Test",
+        launch_provider="SpaceX",
+        created_alert_names=("Launch Soon Alert",),
+        previous_launch=LaunchSnapshot(
+            name="Starship Flight Test",
+            launch_time=NOW + timedelta(minutes=20),
+            timing_precision="precise",
+            launch_status="go",
+        ),
+        matched_include_terms=("Starship",),
+        last_alert_created_at=last_alert_created_at,
+    )
+
+
+class RecordingNotificationChannel:
+    def __init__(self) -> None:
+        self.deliveries: list[tuple[str, str]] = []
+
+    def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
+        self.deliveries.append((alert_name, recipient_name))
+
+
 class WatcherTests(unittest.TestCase):
+    def test_alert_records_round_trip_through_single_json_file_with_utc_timestamps(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            record = AlertRecord(
+                launch_key="launch-library-2:starship-flight-10",
+                source_name="launch-library-2",
+                source_launch_id="starship-flight-10",
+                launch_name="Starship Flight Test",
+                launch_provider="SpaceX",
+                created_alert_names=("Launch Soon Alert",),
+                previous_launch=LaunchSnapshot(
+                    name="Starship Flight Test",
+                    launch_time=NOW + timedelta(minutes=20),
+                    timing_precision="precise",
+                    launch_status="go",
+                ),
+                matched_include_terms=("Starship",),
+                last_alert_created_at=NOW,
+            )
+
+            save_alert_records(records_path, {record.launch_key: record})
+
+            text = records_path.read_text(encoding="utf-8")
+            self.assertIn('"last_alert_created_at": "2026-05-24T12:00:00Z"', text)
+            self.assertIn('"launch_time": "2026-05-24T12:20:00Z"', text)
+            self.assertNotIn("+00:00", text)
+            self.assertEqual(
+                load_alert_records(records_path), {record.launch_key: record}
+            )
+
+    def test_save_alert_records_preserves_existing_file_when_atomic_replace_fails(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            records_path.write_text('{"alert_records": []}\n', encoding="utf-8")
+            record = alert_record(last_alert_created_at=NOW)
+
+            with patch(
+                "spacex_launch_watcher.watcher.os.replace",
+                side_effect=OSError("disk full"),
+            ):
+                with self.assertRaises(OSError):
+                    save_alert_records(records_path, {record.launch_key: record})
+
+            self.assertEqual(
+                records_path.read_text(encoding="utf-8"),
+                '{"alert_records": []}\n',
+            )
+
+    def test_alert_records_are_pruned_after_configured_retention_period(self) -> None:
+        recent_record = alert_record(
+            launch_key="launch-library-2:recent",
+            last_alert_created_at=NOW - timedelta(days=29, hours=23),
+        )
+        expired_record = alert_record(
+            launch_key="launch-library-2:expired",
+            last_alert_created_at=NOW - timedelta(days=31),
+        )
+
+        pruned = prune_alert_records(
+            {
+                recent_record.launch_key: recent_record,
+                expired_record.launch_key: expired_record,
+            },
+            retention_days=30,
+            now=NOW,
+        )
+
+        self.assertEqual(pruned, {recent_record.launch_key: recent_record})
+
+    def test_watcher_cycle_saves_records_before_notification_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            notification_channel = RecordingNotificationChannel()
+
+            result = run_watcher_cycle(
+                config=watcher_config(),
+                alert_records_path=records_path,
+                launches=(launch(),),
+                notification_channel=notification_channel,
+                now=NOW,
+            )
+
+            self.assertEqual(
+                [alert.name for alert in result.alerts], ["Launch Soon Alert"]
+            )
+            self.assertEqual(
+                notification_channel.deliveries,
+                [("Launch Soon Alert", "Nick")],
+            )
+            saved_records = load_alert_records(records_path)
+            record = saved_records["launch-library-2:starship-flight-10"]
+            self.assertEqual(record.launch_name, "Starship Flight Test")
+            self.assertEqual(record.launch_provider, "SpaceX")
+            self.assertEqual(record.source_name, "launch-library-2")
+            self.assertEqual(record.source_launch_id, "starship-flight-10")
+            self.assertEqual(record.matched_include_terms, ("Starship",))
+            self.assertEqual(record.created_alert_names, ("Launch Soon Alert",))
+            self.assertEqual(record.last_alert_created_at, NOW)
+
+    def test_watcher_cycle_does_not_deliver_notifications_when_record_save_fails(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            records_path = Path(temp_dir) / "alert-records.json"
+            notification_channel = RecordingNotificationChannel()
+
+            with patch(
+                "spacex_launch_watcher.watcher.save_alert_records",
+                side_effect=OSError("disk full"),
+            ):
+                with self.assertRaises(OSError):
+                    run_watcher_cycle(
+                        config=watcher_config(),
+                        alert_records_path=records_path,
+                        launches=(launch(),),
+                        notification_channel=notification_channel,
+                        now=NOW,
+                    )
+
+            self.assertEqual(notification_channel.deliveries, [])
+
     def test_precise_go_launch_inside_launch_soon_threshold_creates_alert_and_record(
         self,
     ) -> None:

@@ -9,7 +9,7 @@ Personal SpaceX launch watcher that sends Pushover notifications when selected l
 - Launch Library 2 as the first schedule source
 - Pushover notifications to one or more recipients
 - Pacific-time notification text
-- Minimal JSON state in a bind-mounted `data/` directory
+- Minimal runtime output in a bind-mounted `logs/` directory
 
 ## Relevant Launches
 

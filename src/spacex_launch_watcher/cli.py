@@ -4,7 +4,13 @@ import argparse
 from pathlib import Path
 
 from spacex_launch_watcher.config import ConfigError, load_config
-from spacex_launch_watcher.watcher import run_dry_watcher_cycle
+from spacex_launch_watcher.watcher import (
+    FakeNotificationChannel,
+    run_dry_watcher_cycle,
+    run_watcher_cycle,
+)
+
+DEFAULT_ALERT_RECORDS_PATH = "logs/alert-records.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
                 "--dry-run",
                 action="store_true",
                 help="Run one Watcher evaluation with fake launch data.",
+            )
+            command_parser.add_argument(
+                "--alert-records",
+                default=DEFAULT_ALERT_RECORDS_PATH,
+                help="Path to the Alert Records JSON file.",
             )
     return parser
 
@@ -47,6 +58,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "once" and args.dry_run:
         print(run_dry_watcher_cycle(config))
+    elif args.command == "once":
+        notification_channel = FakeNotificationChannel()
+        decision = run_watcher_cycle(
+            config=config,
+            alert_records_path=Path(args.alert_records),
+            notification_channel=notification_channel,
+        )
+        print(f"Created {len(decision.alerts)} Alert(s).")
+        print(f"Delivered {len(notification_channel.deliveries)} fake Notification(s).")
     else:
         print(
             f"{args.command}: configuration valid for "
