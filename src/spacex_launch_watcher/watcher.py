@@ -202,13 +202,20 @@ def run_watcher_cycle(
         save_alert_records(alert_records_path, decision.alert_records)
 
     for alert in decision.alerts:
+        from spacex_launch_watcher.notifications import format_alert
+
+        notification = format_alert(
+            alert, display_timezone=config.watcher.display_timezone
+        )
         for recipient in config.recipients:
-            notification_channel.deliver(alert.name, recipient.name, alert.message)
+            notification_channel.deliver(alert.name, recipient.name, notification.body)
 
     return decision
 
 
 def run_dry_watcher_cycle(config: WatcherConfig, now: datetime | None = None) -> str:
+    from spacex_launch_watcher.notifications import format_alert
+
     now = datetime.now(UTC) if now is None else now
     decision = evaluate_alerts(
         launches=_fake_launches(now),
@@ -222,9 +229,12 @@ def run_dry_watcher_cycle(config: WatcherConfig, now: datetime | None = None) ->
         lines.append("No candidate Alerts.")
     for alert in decision.alerts:
         recipients = ", ".join(recipient.name for recipient in config.recipients)
+        notification = format_alert(
+            alert, display_timezone=config.watcher.display_timezone
+        )
         lines.append(f"Candidate Alert: {alert.name}")
         lines.append(f"Launch: {alert.launch.name}")
-        lines.append(f"Message: {alert.message}")
+        lines.append(f"Message: {notification.body}")
         lines.append(f"Dry Run would send to: {recipients}")
     lines.append("No Notifications sent.")
     lines.append("No Alert Records written.")

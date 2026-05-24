@@ -132,10 +132,10 @@ def alert_record(
 
 class RecordingNotificationChannel:
     def __init__(self) -> None:
-        self.deliveries: list[tuple[str, str]] = []
+        self.deliveries: list[tuple[str, str, str]] = []
 
     def deliver(self, alert_name: str, recipient_name: str, message: str) -> None:
-        self.deliveries.append((alert_name, recipient_name))
+        self.deliveries.append((alert_name, recipient_name, message))
 
 
 class WatcherTests(unittest.TestCase):
@@ -230,7 +230,14 @@ class WatcherTests(unittest.TestCase):
             )
             self.assertEqual(
                 notification_channel.deliveries,
-                [("Launch Soon Alert", "Nick")],
+                [
+                    (
+                        "Launch Soon Alert",
+                        "Nick",
+                        "Starship Flight Test is scheduled soon.\n"
+                        "Launch Time: 2026-05-24 5:20 AM PDT",
+                    )
+                ],
             )
             saved_records = load_alert_records(records_path)
             record = saved_records["launch-library-2:starship-flight-10"]
