@@ -1,23 +1,43 @@
-[watcher]
+# Rocket Watcher behavior config (non-secret).
+# Copy to config.toml and edit. Secrets live in .env, never here.
+
+[relevance]
+# Case-insensitive Launch Provider match against the schedule source.
 launch_provider = "SpaceX"
-include_terms = ["Vandenberg", "Starbase", "Boca Chica", "Starship"]
-display_timezone = "America/Los_Angeles"
-poll_interval_seconds = 300
+# A launch is relevant only if at least one term (case-insensitive substring)
+# matches the launch name, mission name/description, or pad/location name.
+# Must be non-empty: there is no implicit "all SpaceX launches" mode.
+include_terms = ["Starship", "Starlink"]
+
+[alerts]
+# Launch Soon fires when a precisely-timed go launch is this close.
+launch_soon_minutes = 60
+# Launch Imminent fires when it is this close (must be < launch_soon_minutes).
+launch_imminent_minutes = 10
+# A Correction Alert fires when an already-alerted launch's time shifts this much.
+correction_time_shift_minutes = 30
+# Launches further out than this are not considered for countdown alerts.
+schedule_lookahead_hours = 30
+
+[watcher]
+poll_interval_minutes = 5
+# Alert Records are kept this long after the most recent Alert for a launch.
 retention_days = 30
+# Launch times in notifications and logs are shown in this IANA timezone.
+display_timezone = "America/Los_Angeles"
+alert_records_path = "data/alert_records.json"
+log_path = "logs/watcher.log"
 
-[launch_schedule_source]
-name = "launch-library-2"
+[pushover]
+# Name of the environment variable holding the Pushover application token.
+token_env = "PUSHOVER_TOKEN"
 
-[alert_policy]
-launch_soon_minutes_before = 30
-launch_imminent_minutes_before = 5
-hour_precision_window_minutes = 60
-correction_threshold_minutes = 10
-
-[notification_channel]
-type = "pushover"
-app_token_env = "PUSHOVER_APP_TOKEN"
-
+# Every alert is sent to every recipient. Each entry names the environment
+# variable holding that recipient's Pushover user key.
 [[recipients]]
-name = "Nick"
-user_key_env = "PUSHOVER_USER_KEY_NICK"
+name = "me"
+user_key_env = "PUSHOVER_USER_ME"
+
+# [[recipients]]
+# name = "partner"
+# user_key_env = "PUSHOVER_USER_PARTNER"

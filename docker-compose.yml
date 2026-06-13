@@ -1,0 +1,11 @@
+services:
+  rocket-watcher:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./config.toml:/app/config.toml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs

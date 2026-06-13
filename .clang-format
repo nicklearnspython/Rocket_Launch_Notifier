@@ -1,0 +1,9 @@
+# 2-space indentation, 100-column limit, otherwise Google C++ style.
+BasedOnStyle: Google
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ColumnLimit: 100
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Preserve
