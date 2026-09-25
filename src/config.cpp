@@ -35,6 +35,17 @@ int optionalPositiveInt(const toml::table* table, const std::string& key, const 
   return static_cast<int>(value->get());
 }
 
+bool optionalBool(const toml::table* table, const std::string& key, const std::string& where,
+                  bool defaultValue) {
+  const toml::node* node = (table != nullptr) ? table->get(key) : nullptr;
+  if (node == nullptr) return defaultValue;
+  const auto* value = node->as_boolean();
+  if (value == nullptr) {
+    throw ConfigError(where + "." + key + " must be true or false");
+  }
+  return value->get();
+}
+
 std::string optionalString(const toml::table* table, const std::string& key,
                            const std::string& defaultValue) {
   const toml::node* node = (table != nullptr) ? table->get(key) : nullptr;
@@ -137,6 +148,8 @@ Config loadConfig(const std::filesystem::path& path) {
   config.alertRecordsPath =
       optionalString(watcher, "alert_records_path", "data/alert_records.json");
   config.logPath = optionalString(watcher, "log_path", "logs/watcher.log");
+  config.logMaxSizeMb = optionalPositiveInt(watcher, "log_max_size_mb", "watcher", 5);
+  config.verbose = optionalBool(watcher, "verbose", "watcher", false);
 
   if (config.launchImminentMinutes >= config.launchSoonMinutes) {
     throw ConfigError("alerts.launch_imminent_minutes must be less than launch_soon_minutes");

@@ -162,6 +162,36 @@ TEST_F(CliTest, OnceDeliveryFailureExitsNonzero) {
   EXPECT_EQ(runCli({"once"}), 1);
 }
 
+TEST_F(CliTest, OnceWritesQuietLogToFile) {
+  Launch far = makeLaunch();
+  far.launchTime = utcNow() + 20h;
+  useSource({far});
+  useChannel(std::make_shared<FakeChannel>());
+  EXPECT_EQ(runCli({"once"}), 0);
+  std::ifstream log(logPath_);
+  std::string contents((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+  EXPECT_THAT(contents, HasSubstr("now tracking: Falcon 9 Block 5 | Starlink Group 12-34"));
+  EXPECT_THAT(contents, HasSubstr("status: 1 upcoming launches evaluated, 1 tracked"));
+  EXPECT_THAT(contents, ::testing::Not(HasSubstr("eval:")));
+}
+
+TEST(AppendLogLine, RotatesOnceTheLogReachesTheCap) {
+  TempDir dir;
+  std::filesystem::path log = dir / "logs" / "watcher.log";
+  appendLogLine(log, "first", 10);   // creates the directory and file
+  appendLogLine(log, "second", 10);  // 6 bytes so far: still under the cap
+  appendLogLine(log, "third", 10);   // 13 bytes: rotate first
+  std::ifstream current(log);
+  std::string current_text((std::istreambuf_iterator<char>(current)),
+                           std::istreambuf_iterator<char>());
+  std::filesystem::path rotated = log;
+  rotated += ".1";
+  std::ifstream old(rotated);
+  std::string old_text((std::istreambuf_iterator<char>(old)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(current_text, "third\n");
+  EXPECT_EQ(old_text, "first\nsecond\n");
+}
+
 TEST_F(CliTest, UnknownCommandExitsWithUsageError) {
   EXPECT_EQ(runCli({"frobnicate"}), 2);
   EXPECT_THAT(err_.str(), HasSubstr("unknown command"));

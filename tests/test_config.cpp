@@ -86,6 +86,8 @@ TEST(Config, ValidConfigLoadsWithDefaults) {
   EXPECT_EQ(config.pollIntervalMinutes, 5);
   EXPECT_EQ(config.retentionDays, 30);
   EXPECT_EQ(config.displayTimezone, "America/Los_Angeles");
+  EXPECT_EQ(config.logMaxSizeMb, 5);
+  EXPECT_FALSE(config.verbose);
 }
 
 TEST(Config, ExplicitValuesOverrideDefaults) {
@@ -100,8 +102,12 @@ correction_time_shift_minutes = 45
 poll_interval_minutes = 10
 retention_days = 14
 display_timezone = "UTC"
+log_max_size_mb = 20
+verbose = true
 )";
   Config config = loadConfig(writeConfig(dir, text));
+  EXPECT_EQ(config.logMaxSizeMb, 20);
+  EXPECT_TRUE(config.verbose);
   EXPECT_EQ(config.launchSoonMinutes, 90);
   EXPECT_EQ(config.launchImminentMinutes, 15);
   EXPECT_EQ(config.correctionTimeShiftMinutes, 45);
@@ -160,7 +166,11 @@ INSTANTIATE_TEST_SUITE_P(
         InvalidConfigCase{"ImminentNotLessThanSoon",
                           kValid + "\n[alerts]\nlaunch_imminent_minutes = 60\n", "less than"},
         InvalidConfigCase{"NonPositivePollInterval",
-                          kValid + "\n[watcher]\npoll_interval_minutes = 0\n", "positive"}),
+                          kValid + "\n[watcher]\npoll_interval_minutes = 0\n", "positive"},
+        InvalidConfigCase{"NonBooleanVerbose", kValid + "\n[watcher]\nverbose = \"yes\"\n",
+                          "true or false"},
+        InvalidConfigCase{"NonPositiveLogMaxSize", kValid + "\n[watcher]\nlog_max_size_mb = 0\n",
+                          "positive"}),
     [](const ::testing::TestParamInfo<InvalidConfigCase>& info) { return info.param.name; });
 
 TEST(Config, MissingConfigFileIsAConfigError) {

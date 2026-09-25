@@ -166,6 +166,7 @@ _Avoid_: state, history, memory
 - An **Alert Record** belongs to exactly one **Relevant Launch**
 - An **Alert Record** records zero or more prior **Alerts**
 - An **Alert Record** records the named **Alerts** already created for a **Relevant Launch**
+- A **Correction Alert** resets which **Countdown Alerts** count as already created, so a later attempt (e.g. after a scrub) gets its own **Countdown Alerts**
 
 ## Example Dialogue
 

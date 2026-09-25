@@ -12,10 +12,22 @@
 
 namespace rocket_watcher {
 
+// Why one launch did or did not produce an Alert this cycle.
+struct Evaluation {
+  std::string launchKey;
+  std::string launchName;
+  bool relevant = false;
+  bool alerted = false;
+  std::string note;  // e.g. "silent (status unknown)"
+
+  // "Falcon 9 Block 5 | Starlink Group 17-44 [ll2:...]: silent (status unknown)"
+  std::string line() const { return launchName + " [" + launchKey + "]: " + note; }
+};
+
 struct CycleDecision {
   std::vector<Alert> alerts;
   std::vector<AlertRecord> updatedRecords;
-  std::vector<std::string> evaluations;
+  std::vector<Evaluation> evaluations;
 };
 
 CycleDecision decideCycle(const std::vector<Launch>& launches,

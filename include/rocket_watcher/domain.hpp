@@ -45,6 +45,8 @@ struct Launch {
   std::optional<std::string> missionName;
   std::optional<std::string> missionDescription;
   std::optional<std::string> padName;
+  // Short launch vehicle name, e.g. "Falcon 9" or "Starship".
+  std::optional<std::string> vehicle;
 
   // Combined stable identity key, backed by the source.
   std::string key() const { return sourceName + ":" + sourceLaunchId; }

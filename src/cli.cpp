@@ -44,18 +44,15 @@ class NullChannel : public NotificationChannel {
 Logger makeLogger(const Config& config, bool toFile, std::ostream& out) {
   const std::chrono::time_zone* zone = config.displayZone();
   std::filesystem::path log_path = config.logPath;
-  return [zone, log_path, toFile, &out](const std::string& message) {
+  std::uintmax_t max_bytes = static_cast<std::uintmax_t>(config.logMaxSizeMb) * 1024 * 1024;
+  return [zone, log_path, max_bytes, toFile, &out](const std::string& message) {
     TimePoint now = utcNow();
     std::string line =
         "[" + formatUtcSeconds(now) + " UTC / " + formatDisplayShort(now, zone) + "] " + message;
     out << line << "\n";
     out.flush();
     if (toFile) {
-      if (log_path.has_parent_path()) {
-        std::filesystem::create_directories(log_path.parent_path());
-      }
-      std::ofstream handle(log_path, std::ios::app);
-      handle << line << "\n";
+      appendLogLine(log_path, line, max_bytes);
     }
   };
 }
@@ -73,6 +70,7 @@ int commandOnce(const Config& config, bool dryRun, const CliDeps& deps) {
   JsonAlertRecordStore store(config.alertRecordsPath);
   CycleOptions options;
   options.dryRun = dryRun;
+  options.verbose = config.verbose;
   CycleOutcome outcome = runCycle(*source, store, *channel, config, log, options);
   return outcome.ok() ? 0 : 1;
 }
@@ -89,12 +87,15 @@ int commandWatch(const Config& config, const CliDeps& deps) {
   auto sleep_fn = deps.sleepFn ? deps.sleepFn : interruptibleSleep;
   auto interval = std::chrono::minutes{config.pollIntervalMinutes};
 
-  log("watch started; polling every " + std::to_string(config.pollIntervalMinutes) + " minute(s)");
+  log("watch started; polling every " + std::to_string(config.pollIntervalMinutes) + " minute(s)" +
+      (config.verbose ? " (verbose)" : ""));
+  // Failures are logged as they happen, and the loop keeps polling.
+  LogMemory memory;
+  CycleOptions options;
+  options.verbose = config.verbose;
+  options.memory = &memory;
   while (true) {
-    CycleOutcome outcome = runCycle(*source, store, *channel, config, log);
-    if (!outcome.ok()) {
-      log("cycle finished with failures; continuing to poll");
-    }
+    runCycle(*source, store, *channel, config, log, options);
     if (!sleep_fn(interval)) break;
   }
   log("watch stopped");
@@ -187,6 +188,22 @@ ParsedArgs parseArgs(const std::vector<std::string>& args) {
 }
 
 }  // namespace
+
+void appendLogLine(const std::filesystem::path& path, const std::string& line,
+                   std::uintmax_t maxBytes) {
+  if (path.has_parent_path()) {
+    std::filesystem::create_directories(path.parent_path());
+  }
+  std::error_code error;
+  std::uintmax_t size = std::filesystem::file_size(path, error);
+  if (!error && size >= maxBytes) {
+    std::filesystem::path rotated = path;
+    rotated += ".1";
+    std::filesystem::rename(path, rotated, error);  // best effort; keep logging either way
+  }
+  std::ofstream handle(path, std::ios::app);
+  handle << line << "\n";
+}
 
 std::unique_ptr<LaunchScheduleSource> defaultBuildSource(const Config&) {
   return std::make_unique<LaunchLibrarySource>();
