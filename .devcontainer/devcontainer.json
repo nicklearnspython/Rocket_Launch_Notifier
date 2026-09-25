@@ -1,0 +1,25 @@
+// Development container: the same GCC 14 toolchain the Dockerfile's test
+// stage uses, plus coverage, lint, and debugging tools. Build and test from
+// the integrated terminal:
+//   cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+//   cmake --build build && ctest --test-dir build --output-on-failure
+// Production images are built on the host with scripts/deploy.sh.
+{
+  "name": "Rocket Launch Notifier",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "target": "dev"
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.cpptools", "ms-vscode.cmake-tools"],
+      "settings": {
+        "cmake.generator": "Ninja",
+        "cmake.buildDirectory": "${workspaceFolder}/build"
+      }
+    }
+  }
+}

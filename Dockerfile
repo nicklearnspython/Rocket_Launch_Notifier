@@ -1,34 +1,42 @@
 # Multi-stage build:
-#   toolchain - GCC 14 + CMake + libcurl headers (shared by build and test)
+#   toolchain - GCC 14 + CMake + libcurl headers
+#   dev       - toolchain + coverage, lint, and debug tools; the dev
+#               container (.devcontainer/) runs this stage
 #   build     - release binary
-#   test      - debug build with coverage; runs unit tests and enforces the
-#               60% line-coverage gate (aspirational target: 70%)
+#   test      - debug build with coverage on the dev stage; runs unit tests
+#               and enforces the 60% line-coverage gate (aspirational: 70%)
 #   runtime   - slim image with just the binary and runtime deps
 #
 #   docker build --target runtime -t rocket-watcher .         # the app
 #   docker build --target test --progress=plain .             # tests + coverage
+#   scripts/deploy.sh                                         # test, build arm64, ship to the Pi
 
 FROM gcc:14 AS toolchain
 RUN apt-get update && apt-get install -y --no-install-recommends \
       cmake ninja-build libcurl4-openssl-dev ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+
+FROM toolchain AS dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      gcovr lcov clang-format clang-tidy gdb \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM toolchain AS build
 COPY CMakeLists.txt ./
 COPY include ./include
 COPY src ./src
 COPY tests ./tests
-
-FROM toolchain AS build
 RUN cmake -S . -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DROCKET_WATCHER_BUILD_TESTS=OFF \
     && cmake --build build
 
-FROM toolchain AS test
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      gcovr lcov clang-format clang-tidy \
-    && rm -rf /var/lib/apt/lists/*
-COPY .clang-format .clang-tidy ./
+FROM dev AS test
+COPY CMakeLists.txt .clang-format .clang-tidy ./
+COPY include ./include
+COPY src ./src
+COPY tests ./tests
 RUN cmake -S . -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=Debug \
       -DROCKET_WATCHER_COVERAGE=ON \

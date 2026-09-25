@@ -28,6 +28,7 @@ json ll2Item() {
       {"mission",
        {{"name", "Starlink Group 12-34"}, {"description", "A batch of Starlink satellites."}}},
       {"pad", {{"name", "SLC-40"}, {"location", {{"name", "Cape Canaveral SFS, FL, USA"}}}}},
+      {"rocket", {{"configuration", {{"name", "Falcon 9"}, {"full_name", "Falcon 9 Block 5"}}}}},
   };
 }
 
@@ -64,6 +65,7 @@ TEST(LaunchLibrary, MapsContractFields) {
   ASSERT_TRUE(launch.missionDescription.has_value());
   EXPECT_THAT(*launch.missionDescription, HasSubstr("Starlink satellites"));
   EXPECT_EQ(launch.padName, "SLC-40, Cape Canaveral SFS, FL, USA");
+  EXPECT_EQ(launch.vehicle, "Falcon 9");
   EXPECT_THAT(result.warnings, IsEmpty());
   EXPECT_THAT(fixture.capturedUrl, HasSubstr("launch/upcoming/"));
 }
@@ -162,12 +164,14 @@ TEST(LaunchLibrary, MissingMissionAndPadAreTolerated) {
   json item = ll2Item();
   item["mission"] = nullptr;
   item["pad"] = nullptr;
+  item.erase("rocket");
   SourceFixture fixture({item});
   FetchResult result = fixture.source->fetch();
   ASSERT_EQ(result.launches.size(), 1u);
   const Launch& launch = result.launches[0];
   EXPECT_FALSE(launch.missionName.has_value());
   EXPECT_FALSE(launch.padName.has_value());
+  EXPECT_FALSE(launch.vehicle.has_value());
   EXPECT_THAT(launch.searchableFields(), ::testing::ElementsAre(launch.name));
 }
 
