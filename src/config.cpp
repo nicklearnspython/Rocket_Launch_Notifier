@@ -1,5 +1,7 @@
 #include "rocket_watcher/config.hpp"
 
+#include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <set>
@@ -51,6 +53,41 @@ std::string optionalString(const toml::table* table, const std::string& key,
   const toml::node* node = (table != nullptr) ? table->get(key) : nullptr;
   const auto* value = (node != nullptr) ? node->as_string() : nullptr;
   return (value != nullptr) ? value->get() : defaultValue;
+}
+
+// "sunday" / "Sun" -> std::chrono::Sunday (case-insensitive).
+std::chrono::weekday parseWeekday(const std::string& text, const std::string& where) {
+  static const std::array<std::string, 7> kNames = {"sunday",   "monday", "tuesday", "wednesday",
+                                                    "thursday", "friday", "saturday"};
+  std::string wanted = toLower(trim(text));
+  for (unsigned i = 0; i < kNames.size(); ++i) {
+    if (wanted.size() >= 3 && kNames[i].starts_with(wanted)) return std::chrono::weekday{i};
+  }
+  throw ConfigError(where + " must be a day of the week, e.g. \"Sunday\"");
+}
+
+// "20:00" -> 20h. 24-hour HH:MM.
+std::chrono::minutes parseTimeOfDay(const std::string& text, const std::string& where) {
+  int hour = -1;
+  int minute = -1;
+  int consumed = 0;
+  std::string trimmed = trim(text);
+  if (std::sscanf(trimmed.c_str(), "%2d:%2d%n", &hour, &minute, &consumed) != 2 ||
+      consumed != static_cast<int>(trimmed.size()) || hour < 0 || hour > 23 || minute < 0 ||
+      minute > 59) {
+    throw ConfigError(where + " must be a 24-hour time like \"20:00\"");
+  }
+  return std::chrono::hours{hour} + std::chrono::minutes{minute};
+}
+
+DigestConfig loadDigest(const toml::table* table) {
+  DigestConfig digest;
+  digest.enabled = optionalBool(table, "enabled", "digest", digest.enabled);
+  digest.day = parseWeekday(optionalString(table, "day", "Sunday"), "digest.day");
+  digest.timeOfDay = parseTimeOfDay(optionalString(table, "time", "20:00"), "digest.time");
+  digest.lookaheadDays = optionalPositiveInt(table, "lookahead_days", "digest", 7);
+  digest.statePath = optionalString(table, "state_path", digest.statePath);
+  return digest;
 }
 
 }  // namespace
@@ -150,6 +187,7 @@ Config loadConfig(const std::filesystem::path& path) {
   config.logPath = optionalString(watcher, "log_path", "logs/watcher.log");
   config.logMaxSizeMb = optionalPositiveInt(watcher, "log_max_size_mb", "watcher", 5);
   config.verbose = optionalBool(watcher, "verbose", "watcher", false);
+  config.digest = loadDigest(data["digest"].as_table());
 
   if (config.launchImminentMinutes >= config.launchSoonMinutes) {
     throw ConfigError("alerts.launch_imminent_minutes must be less than launch_soon_minutes");

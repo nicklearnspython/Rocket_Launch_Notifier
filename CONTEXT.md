@@ -112,6 +112,10 @@ _Avoid_: hour-window alert, launch window alert, hour-precision launch window he
 An **Alert** sent after an earlier **Alert** when launch timing, **Launch Status**, **Timing Precision**, or relevance materially changes.
 _Avoid_: update, correction notification
 
+**Weekly Digest**:
+A scheduled, once-a-week summary of upcoming **Relevant Launches** for general awareness. It is not an **Alert**: it is never corrected or followed up, and it does not affect **Alert Records**.
+_Avoid_: weekly alert, summary alert
+
 **Notification**:
 A delivered message sent through the configured notification channel for an **Alert**.
 _Avoid_: alert
@@ -157,6 +161,7 @@ _Avoid_: state, history, memory
 - A **Countdown Alert**, **Hour-Precision Alert**, or **Correction Alert** is an **Alert**
 - A **Launch Soon Alert** and **Launch Imminent Alert** are **Countdown Alerts**
 - An **Alert** may prompt a **Recipient** to open a **Live Feed**
+- A **Weekly Digest** lists zero or more **Relevant Launches** and is delivered to every **Recipient**
 - A **Notification** delivers one **Alert** to one **Recipient**
 - A **Notification** is sent through one **Notification Channel**
 - A **Notification Delivery Record** belongs to one **Notification**

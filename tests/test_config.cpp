@@ -88,6 +88,29 @@ TEST(Config, ValidConfigLoadsWithDefaults) {
   EXPECT_EQ(config.displayTimezone, "America/Los_Angeles");
   EXPECT_EQ(config.logMaxSizeMb, 5);
   EXPECT_FALSE(config.verbose);
+  EXPECT_TRUE(config.digest.enabled);
+  EXPECT_EQ(config.digest.day, std::chrono::Sunday);
+  EXPECT_EQ(config.digest.timeOfDay, std::chrono::hours{20});
+  EXPECT_EQ(config.digest.lookaheadDays, 7);
+  EXPECT_EQ(config.digest.statePath, "data/digest_state.json");
+}
+
+TEST(Config, DigestSettingsOverrideDefaults) {
+  TempDir dir;
+  std::string text = kValid + R"(
+[digest]
+enabled = false
+day = "fri"
+time = "07:30"
+lookahead_days = 10
+state_path = "elsewhere/digest.json"
+)";
+  Config config = loadConfig(writeConfig(dir, text));
+  EXPECT_FALSE(config.digest.enabled);
+  EXPECT_EQ(config.digest.day, std::chrono::Friday);
+  EXPECT_EQ(config.digest.timeOfDay, std::chrono::hours{7} + std::chrono::minutes{30});
+  EXPECT_EQ(config.digest.lookaheadDays, 10);
+  EXPECT_EQ(config.digest.statePath, "elsewhere/digest.json");
 }
 
 TEST(Config, ExplicitValuesOverrideDefaults) {
@@ -170,6 +193,13 @@ INSTANTIATE_TEST_SUITE_P(
         InvalidConfigCase{"NonBooleanVerbose", kValid + "\n[watcher]\nverbose = \"yes\"\n",
                           "true or false"},
         InvalidConfigCase{"NonPositiveLogMaxSize", kValid + "\n[watcher]\nlog_max_size_mb = 0\n",
+                          "positive"},
+        InvalidConfigCase{"BadDigestDay", kValid + "\n[digest]\nday = \"Funday\"\n", "digest.day"},
+        InvalidConfigCase{"AmbiguousDigestDay", kValid + "\n[digest]\nday = \"t\"\n", "digest.day"},
+        InvalidConfigCase{"BadDigestTime", kValid + "\n[digest]\ntime = \"8pm\"\n", "digest.time"},
+        InvalidConfigCase{"OutOfRangeDigestTime", kValid + "\n[digest]\ntime = \"24:00\"\n",
+                          "digest.time"},
+        InvalidConfigCase{"NonPositiveDigestLookahead", kValid + "\n[digest]\nlookahead_days = 0\n",
                           "positive"}),
     [](const ::testing::TestParamInfo<InvalidConfigCase>& info) { return info.param.name; });
 

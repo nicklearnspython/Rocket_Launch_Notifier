@@ -310,5 +310,119 @@ TEST(Orchestration, MockChannelReceivesFormattedMessagePerRecipient) {
   EXPECT_TRUE(outcome.ok());
 }
 
+// Sunday 2026-06-07 20:00 PDT, when the default Weekly Digest is scheduled.
+constexpr TimePoint kDigestSlot = std::chrono::sys_days{std::chrono::year{2026} / 6 / 8} + 3h;
+
+struct DigestHarness {
+  CycleOutcome run(LaunchScheduleSource& source, NotificationChannel& channel, TimePoint now,
+                   bool dryRun = false, Config config = makeConfig()) {
+    CycleOptions options;
+    options.nowFn = [now] { return now; };
+    options.dryRun = dryRun;
+    options.digestStore = &digestStore;
+    return runCycle(source, cycle.store, channel, config, cycle.logger(), options);
+  }
+
+  CycleHarness cycle;
+  JsonDigestStateStore digestStore{cycle.dir / "digest.json"};
+};
+
+Launch digestWeekLaunch() {
+  Launch launch = makeLaunch();
+  launch.launchTime = kDigestSlot + 48h;
+  return launch;
+}
+
+TEST(WeeklyDigest, SentToEveryRecipientWhenDue) {
+  DigestHarness harness;
+  FakeSource source({digestWeekLaunch()});
+  FakeChannel channel;
+  CycleOutcome outcome = harness.run(source, channel, kDigestSlot + 2min);
+  EXPECT_TRUE(outcome.ok());
+  EXPECT_TRUE(outcome.digestSent);
+  EXPECT_THAT(channel.sentRecipients(), ElementsAre("alice", "bob"));
+  EXPECT_EQ(channel.sent[0].first.title, "This week: 1 tracked launch");
+  EXPECT_EQ(harness.digestStore.loadLastSentSlot(), kDigestSlot);
+  EXPECT_TRUE(harness.cycle.logsContain("weekly digest: [This week: 1 tracked launch]"));
+}
+
+TEST(WeeklyDigest, SentOnlyOncePerSlot) {
+  DigestHarness harness;
+  FakeSource source({digestWeekLaunch()});
+  FakeChannel channel;
+  harness.run(source, channel, kDigestSlot + 2min);
+  CycleOutcome outcome = harness.run(source, channel, kDigestSlot + 7min);
+  EXPECT_FALSE(outcome.digestSent);
+  EXPECT_EQ(channel.sent.size(), 2u);
+}
+
+TEST(WeeklyDigest, NotSentBeforeSlot) {
+  DigestHarness harness;
+  FakeSource source({digestWeekLaunch()});
+  FakeChannel channel;
+  CycleOutcome outcome = harness.run(source, channel, kDigestSlot - 1min);
+  EXPECT_FALSE(outcome.digestSent);
+  EXPECT_THAT(channel.sent, IsEmpty());
+}
+
+TEST(WeeklyDigest, SentAlongsideAlertsInTheSameCycle) {
+  DigestHarness harness;
+  Launch soon = makeLaunch();
+  soon.launchTime = kDigestSlot + 45min;
+  FakeSource source({soon});
+  FakeChannel channel;
+  CycleOutcome outcome = harness.run(source, channel, kDigestSlot);
+  EXPECT_EQ(outcome.alertsCreated, 1);
+  EXPECT_TRUE(outcome.digestSent);
+  ASSERT_EQ(channel.sent.size(), 4u);
+  EXPECT_EQ(channel.sent[0].first.title, "Launch soon: Starlink Group 12-34");
+  EXPECT_EQ(channel.sent[2].first.title, "This week: 1 tracked launch");
+}
+
+TEST(WeeklyDigest, DryRunLogsButSendsAndSavesNothing) {
+  DigestHarness harness;
+  FakeSource source({digestWeekLaunch()});
+  FakeChannel channel;
+  CycleOutcome outcome = harness.run(source, channel, kDigestSlot + 2min, /*dryRun=*/true);
+  EXPECT_FALSE(outcome.digestSent);
+  EXPECT_THAT(channel.sent, IsEmpty());
+  EXPECT_FALSE(std::filesystem::exists(harness.digestStore.path()));
+  EXPECT_TRUE(harness.cycle.logsContain("dry run: weekly digest due; would send"));
+}
+
+TEST(WeeklyDigest, DisabledInConfigSendsNothing) {
+  DigestHarness harness;
+  FakeSource source({digestWeekLaunch()});
+  FakeChannel channel;
+  Config config = makeConfig();
+  config.digest.enabled = false;
+  CycleOutcome outcome = harness.run(source, channel, kDigestSlot + 2min, false, config);
+  EXPECT_FALSE(outcome.digestSent);
+  EXPECT_THAT(channel.sent, IsEmpty());
+}
+
+TEST(WeeklyDigest, SourceFailureRetriesNextCycle) {
+  DigestHarness harness;
+  FakeSource down({}, {}, "LL2 down");
+  FakeSource up({digestWeekLaunch()});
+  FakeChannel channel;
+  EXPECT_FALSE(harness.run(down, channel, kDigestSlot + 2min).digestSent);
+  EXPECT_TRUE(harness.run(up, channel, kDigestSlot + 7min).digestSent);
+}
+
+TEST(WeeklyDigest, CorruptStateSkipsDigestButNotAlerts) {
+  DigestHarness harness;
+  std::ofstream(harness.digestStore.path()) << "{corrupt";
+  Launch soon = makeLaunch();
+  soon.launchTime = kDigestSlot + 45min;
+  FakeSource source({soon});
+  FakeChannel channel;
+  CycleOutcome outcome = harness.run(source, channel, kDigestSlot);
+  EXPECT_TRUE(outcome.saveFailed);
+  EXPECT_FALSE(outcome.digestSent);
+  EXPECT_EQ(channel.sent.size(), 2u);  // the alert still went out
+  EXPECT_TRUE(harness.cycle.logsContain("failed to load digest state"));
+}
+
 }  // namespace
 }  // namespace rocket_watcher::testing
