@@ -33,4 +33,10 @@ std::string formatUtcSeconds(TimePoint time);
 // "11:45 PDT" (display-timezone wall clock, for log lines).
 std::string formatDisplayShort(TimePoint time, const std::chrono::time_zone* zone);
 
+// "Tue Sep 29" (display-timezone calendar day).
+std::string formatDisplayWeekday(TimePoint time, const std::chrono::time_zone* zone);
+
+// "11:00 PDT": formatDisplayShort truncated to the hour.
+std::string formatDisplayShortHour(TimePoint time, const std::chrono::time_zone* zone);
+
 }  // namespace rocket_watcher

@@ -42,8 +42,13 @@ class CliTest : public ::testing::Test {
     recordsPath_ = (dir_ / "records.json").generic_string();
     logPath_ = (dir_ / "watcher.log").generic_string();
     configPath_ = (dir_ / "config.toml").generic_string();
+    digestStatePath_ = (dir_ / "digest.json").generic_string();
+    // The CLI uses the real clock, so scheduled digests are disabled to keep
+    // `once` tests independent of the day of the week.
     std::ofstream(configPath_) << kConfigBody << "\n[watcher]\nalert_records_path = '"
-                               << recordsPath_ << "'\nlog_path = '" << logPath_ << "'\n";
+                               << recordsPath_ << "'\nlog_path = '" << logPath_
+                               << "'\n\n[digest]\nenabled = false\nstate_path = '"
+                               << digestStatePath_ << "'\n";
     env_ = {
         {"PUSHOVER_TOKEN", "tok"},
         {"PUSHOVER_USER_ALICE", "key-a"},
@@ -93,6 +98,7 @@ class CliTest : public ::testing::Test {
   std::string configPath_;
   std::string recordsPath_;
   std::string logPath_;
+  std::string digestStatePath_;
   std::map<std::string, std::string> env_;
   std::ostringstream out_;
   std::ostringstream err_;
@@ -195,6 +201,41 @@ TEST(AppendLogLine, RotatesOnceTheLogReachesTheCap) {
 TEST_F(CliTest, UnknownCommandExitsWithUsageError) {
   EXPECT_EQ(runCli({"frobnicate"}), 2);
   EXPECT_THAT(err_.str(), HasSubstr("unknown command"));
+}
+
+TEST_F(CliTest, DigestDryRunPrintsWithoutSecretsOrSending) {
+  env_.erase("PUSHOVER_TOKEN");
+  Launch launch = makeLaunch();
+  launch.launchTime = utcNow() + 48h;
+  useSource({launch});
+  EXPECT_EQ(runCli({"digest", "--dry-run"}), 0);
+  EXPECT_THAT(out_.str(), HasSubstr("This week: 1 tracked launch"));
+  EXPECT_THAT(out_.str(), HasSubstr("Starlink Group 12-34"));
+  EXPECT_FALSE(std::filesystem::exists(logPath_));
+}
+
+TEST_F(CliTest, DigestSendsToEveryRecipientWithoutMarkingScheduledSlot) {
+  useSource({});
+  auto channel = std::make_shared<FakeChannel>();
+  useChannel(channel);
+  EXPECT_EQ(runCli({"digest"}), 0);
+  EXPECT_THAT(channel->sentRecipients(), ElementsAre("alice", "bob"));
+  EXPECT_EQ(channel->sent[0].first.title, "This week: no tracked launches");
+  EXPECT_FALSE(std::filesystem::exists(digestStatePath_));
+}
+
+TEST_F(CliTest, DigestExitsNonzeroOnSourceOrDeliveryFailure) {
+  useSource({}, "LL2 down");
+  useChannel(std::make_shared<FakeChannel>());
+  EXPECT_EQ(runCli({"digest"}), 1);
+  useSource({});
+  useChannel(std::make_shared<FakeChannel>(std::set<std::string>{"bob"}));
+  EXPECT_EQ(runCli({"digest"}), 1);
+}
+
+TEST_F(CliTest, DryRunIsRejectedForWatch) {
+  EXPECT_EQ(runCli({"watch", "--dry-run"}), 2);
+  EXPECT_THAT(err_.str(), HasSubstr("once or digest"));
 }
 
 }  // namespace

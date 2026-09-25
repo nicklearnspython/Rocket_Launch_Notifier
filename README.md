@@ -36,10 +36,12 @@ implementations in [src/](src/):
   function shared by `once` and `watch`: fetch → decide → save records → notify.
   If records can't be saved, nothing is sent; a failed notification never rolls
   back a saved record.
+- [digest.hpp](include/rocket_watcher/digest.hpp) — Weekly Digest schedule, launch
+  selection, and the small file remembering which week's digest was sent.
 - [http.hpp](include/rocket_watcher/http.hpp) — HTTP seams; libcurl in production,
   fakes in tests.
-- [cli.hpp](include/rocket_watcher/cli.hpp) — `once`, `watch`, `test-notification`
-  commands with injectable factories for testing.
+- [cli.hpp](include/rocket_watcher/cli.hpp) — `once`, `watch`, `digest`,
+  `test-notification` commands with injectable factories for testing.
 
 Third-party libraries (fetched automatically by CMake): nlohmann/json,
 toml++, GoogleTest/GoogleMock. libcurl comes from the system/base image.
@@ -60,6 +62,32 @@ toml++, GoogleTest/GoogleMock. libcurl comes from the system/base image.
 Notifications are titled with the mission (e.g. `Launch soon: Starlink
 Group 17-44`) and the body opens with the vehicle and pad (e.g. `Falcon 9
 from SLC-4E, Vandenberg SFB, CA`).
+
+## Weekly Digest
+
+Once a week (default Sunday 20:00 in `display_timezone`) every recipient gets
+a short heads-up of the tracked launches in the next 7 days, for example:
+
+```
+This week: 2 tracked launches
+
+Starlink Group 11-4
+Tue Sep 29, 15:30 PDT · go
+Falcon 9 from SLC-4E, Vandenberg SFB, CA
+
+Flight 12
+Thu Oct 1 (date tentative) · not yet confirmed
+Starship from Orbital Launch Mount A, Starbase, TX
+
+Times often slip; countdown alerts will follow.
+```
+
+It is awareness only: no follow-ups when those launches move. A quiet week
+still gets a one-line "no tracked launches" note. The digest reuses the
+normal poll's fetch; the sent week is remembered in `data/digest_state.json`
+so restarts don't repeat it, and a digest missed by more than 3 hours (e.g.
+the Pi was off) is skipped until the next week. Configure it under
+`[digest]`; `digest --dry-run` prints this week's digest without sending.
 
 ## Logging
 
@@ -111,8 +139,10 @@ docker run --rm --env-file .env -v "$(pwd)/config.toml:/app/config.toml:ro" rock
 The host side of `-v` must be an absolute path; a bare name like
 `config.toml` makes Docker silently create an empty named volume instead.
 
-Commands: `once [--dry-run]`, `watch`, `test-notification`. Exit codes:
-`once`/`test-notification` exit nonzero if the source fails or any recipient
+Commands: `once [--dry-run]`, `watch`, `digest [--dry-run]`,
+`test-notification`. `digest` sends the Weekly Digest now (off schedule; the
+scheduled one still goes out). Exit codes:
+`once`/`digest`/`test-notification` exit nonzero if the source fails or any recipient
 delivery fails; config/secret problems exit 2. `watch` logs failures and
 keeps polling.
 

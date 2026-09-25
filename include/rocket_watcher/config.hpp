@@ -24,6 +24,16 @@ struct Recipient {
   std::string userKeyEnv;
 };
 
+// When and what the Weekly Digest covers. The send time is wall-clock time
+// in the display timezone.
+struct DigestConfig {
+  bool enabled = true;
+  std::chrono::weekday day = std::chrono::Sunday;
+  std::chrono::minutes timeOfDay = std::chrono::hours{20};
+  int lookaheadDays = 7;
+  std::string statePath = "data/digest_state.json";
+};
+
 struct Config {
   std::string launchProvider;
   std::vector<std::string> includeTerms;
@@ -44,6 +54,7 @@ struct Config {
   // Log every launch evaluation each cycle instead of only changes to
   // tracked launches plus an hourly status line.
   bool verbose = false;
+  DigestConfig digest;
 
   AlertPolicy policy() const;
 

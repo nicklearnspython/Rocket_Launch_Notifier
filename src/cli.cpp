@@ -1,5 +1,6 @@
 #include "rocket_watcher/cli.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -68,9 +69,11 @@ int commandOnce(const Config& config, bool dryRun, const CliDeps& deps) {
   Logger log = makeLogger(config, /*toFile=*/!dryRun, *deps.out);
   auto source = deps.buildSource(config);
   JsonAlertRecordStore store(config.alertRecordsPath);
+  JsonDigestStateStore digest_store(config.digest.statePath);
   CycleOptions options;
   options.dryRun = dryRun;
   options.verbose = config.verbose;
+  options.digestStore = &digest_store;
   CycleOutcome outcome = runCycle(*source, store, *channel, config, log, options);
   return outcome.ok() ? 0 : 1;
 }
@@ -80,6 +83,7 @@ int commandWatch(const Config& config, const CliDeps& deps) {
   auto channel = deps.buildChannel(config, secrets);
   auto source = deps.buildSource(config);
   JsonAlertRecordStore store(config.alertRecordsPath);
+  JsonDigestStateStore digest_store(config.digest.statePath);
   Logger log = makeLogger(config, /*toFile=*/true, *deps.out);
 
   std::signal(SIGINT, handleStopSignal);
@@ -94,6 +98,7 @@ int commandWatch(const Config& config, const CliDeps& deps) {
   CycleOptions options;
   options.verbose = config.verbose;
   options.memory = &memory;
+  options.digestStore = &digest_store;
   while (true) {
     runCycle(*source, store, *channel, config, log, options);
     if (!sleep_fn(interval)) break;
@@ -124,6 +129,33 @@ int commandTestNotification(const Config& config, const CliDeps& deps) {
   return any_failed ? 1 : 0;
 }
 
+// Sends (or with dryRun, prints) the Weekly Digest now, off schedule.
+// Does not change which scheduled digest counts as sent.
+int commandDigest(const Config& config, bool dryRun, const CliDeps& deps) {
+  std::unique_ptr<NotificationChannel> channel;
+  if (!dryRun) {
+    PushoverSecrets secrets = resolveSecrets(config, deps.getEnv);
+    channel = deps.buildChannel(config, secrets);
+  }
+  auto source = deps.buildSource(config);
+  FetchResult fetch;
+  try {
+    fetch = source->fetch();
+  } catch (const std::exception& error) {
+    *deps.err << "source fetch failed: " << error.what() << "\n";
+    return 1;
+  }
+  Message message = buildDigest(fetch.launches, config, utcNow());
+  if (dryRun) {
+    *deps.out << message.title << "\n\n" << message.body << "\n";
+    return 0;
+  }
+  Logger log = makeLogger(config, /*toFile=*/true, *deps.out);
+  log("weekly digest (sent on demand): [" + message.title + "]");
+  auto deliveries = deliverToAll(*channel, config, message, log);
+  return std::ranges::all_of(deliveries, &DeliveryResult::ok) ? 0 : 1;
+}
+
 void printUsage(std::ostream& out) {
   out << "usage: rocket-watcher [--config PATH] [--env-file PATH] COMMAND\n"
          "\n"
@@ -134,6 +166,9 @@ void printUsage(std::ostream& out) {
          "                      launches and prints candidate alerts without\n"
          "                      sending, writing records, or writing logs\n"
          "  watch               run the long-lived polling loop\n"
+         "  digest [--dry-run]  send the weekly digest to every recipient now;\n"
+         "                      --dry-run prints it instead (the scheduled digest\n"
+         "                      still goes out as usual)\n"
          "  test-notification   send a synthetic notification to every recipient,\n"
          "                      bypassing launch evaluation\n"
          "\n"
@@ -166,8 +201,8 @@ ParsedArgs parseArgs(const std::vector<std::string>& args) {
       }
       (arg == "--config" ? parsed.configPath : parsed.envFilePath) = args[++i];
     } else if (arg == "--dry-run") {
-      if (parsed.command != "once") {
-        parsed.error = "--dry-run is only valid after the once command";
+      if (parsed.command != "once" && parsed.command != "digest") {
+        parsed.error = "--dry-run is only valid after the once or digest command";
         return parsed;
       }
       parsed.dryRun = true;
@@ -180,7 +215,7 @@ ParsedArgs parseArgs(const std::vector<std::string>& args) {
   }
   if (parsed.command.empty()) {
     parsed.error = "a command is required";
-  } else if (parsed.command != "once" && parsed.command != "watch" &&
+  } else if (parsed.command != "once" && parsed.command != "watch" && parsed.command != "digest" &&
              parsed.command != "test-notification") {
     parsed.error = "unknown command: " + parsed.command;
   }
@@ -237,6 +272,9 @@ int runMain(const std::vector<std::string>& args, const CliDeps& deps) {
     }
     if (parsed.command == "watch") {
       return commandWatch(config, deps);
+    }
+    if (parsed.command == "digest") {
+      return commandDigest(config, parsed.dryRun, deps);
     }
     return commandTestNotification(config, deps);
   } catch (const ConfigError& error) {
