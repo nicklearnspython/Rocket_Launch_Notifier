@@ -7,6 +7,11 @@ services:
       context: .
       target: runtime
     restart: unless-stopped
+    # Share the host's network instead of Docker's bridge. The watcher only
+    # makes outbound HTTPS requests, and after Wi-Fi drops the bridge's DNS
+    # forwarding could stay broken for hours while the host itself was back
+    # online (Nov 11, 2026: ~14 h of "Could not resolve hostname").
+    network_mode: host
     env_file: .env
     volumes:
       - ./config.toml:/app/config.toml:ro
