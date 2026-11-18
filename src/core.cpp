@@ -46,9 +46,18 @@ struct LaunchDecision {
 LaunchDecision decideForLaunch(const Launch& launch, const AlertRecord* record,
                                const std::vector<std::string>& matchedTerms,
                                const AlertPolicy& policy, TimePoint now) {
+  // Countdown alerts count only since the most recent correction: a
+  // correction means the earlier countdown no longer describes the launch,
+  // so the next attempt (e.g. after a scrub) gets a countdown of its own.
   std::set<AlertKind> sent_kinds;
   if (record != nullptr) {
-    for (const auto& sent : record->sentAlerts) sent_kinds.insert(sent.kind);
+    for (const auto& sent : record->sentAlerts) {
+      if (sent.kind == AlertKind::kCorrection) {
+        sent_kinds.clear();
+      } else {
+        sent_kinds.insert(sent.kind);
+      }
+    }
   }
 
   if (launch.status == LaunchStatus::kEnded || launch.status == LaunchStatus::kUnknown) {
@@ -166,16 +175,22 @@ CycleDecision decideCycle(const std::vector<Launch>& launches,
 
   CycleDecision decision;
   for (const auto& launch : launches) {
-    std::string label = launch.name + " [" + launch.key() + "]";
+    Evaluation evaluation;
+    evaluation.launchKey = launch.key();
+    evaluation.launchName = launch.name;
     RelevanceResult relevance = evaluateRelevance(launch, launchProvider, includeTerms);
     if (!relevance.relevant) {
-      decision.evaluations.push_back(label + ": not relevant (" + relevance.reason + ")");
+      evaluation.note = "not relevant (" + relevance.reason + ")";
+      decision.evaluations.push_back(evaluation);
       continue;
     }
     auto found = record_map.find(launch.key());
     const AlertRecord* record = (found != record_map.end()) ? &found->second : nullptr;
     LaunchDecision result = decideForLaunch(launch, record, relevance.matchedTerms, policy, now);
-    decision.evaluations.push_back(label + ": " + result.note);
+    evaluation.relevant = true;
+    evaluation.alerted = result.alert.has_value();
+    evaluation.note = result.note;
+    decision.evaluations.push_back(evaluation);
     if (result.alert) {
       decision.alerts.push_back(*result.alert);
       record_map.insert_or_assign(launch.key(), updatedRecord(record, launch, *result.alert, now));

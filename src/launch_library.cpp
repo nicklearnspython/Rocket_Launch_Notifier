@@ -135,6 +135,10 @@ Launch mapLaunch(const json& item, std::vector<std::string>& warnings) {
     pad_name = location_name;
   }
 
+  json rocket = item.value("rocket", json(nullptr));
+  json rocket_config =
+      rocket.is_object() ? rocket.value("configuration", json(nullptr)) : json(nullptr);
+
   Launch launch;
   launch.sourceName = kLaunchLibrarySourceName;
   launch.sourceLaunchId = launch_id;
@@ -146,6 +150,7 @@ Launch mapLaunch(const json& item, std::vector<std::string>& warnings) {
   launch.missionName = optionalStringField(mission, "name");
   launch.missionDescription = optionalStringField(mission, "description");
   launch.padName = pad_name;
+  launch.vehicle = optionalStringField(rocket_config, "name");
   return launch;
 }
 

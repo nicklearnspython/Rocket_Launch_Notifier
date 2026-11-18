@@ -48,12 +48,33 @@ toml++, GoogleTest/GoogleMock. libcurl comes from the system/base image.
 
 - **Launch Soon / Launch Imminent** — for go launches with precise timing,
   within the configured thresholds. Only the most urgent unsent alert fires.
+  After any correction (e.g. a scrub moves the launch time) the countdown
+  resets, so the next attempt gets its own Soon/Imminent alerts.
 - **Possible launch this hour** — softer alert when timing is only precise to
   the hour. Doesn't suppress later precise alerts.
 - **Corrections** — only after a prior alert, with reason-specific titles:
   no longer go, time changed (≥ configurable shift, default 30 min), timing
   now imprecise.
 - Imprecise/unknown timing and ended/unknown status are silent.
+
+Notifications are titled with the mission (e.g. `Launch soon: Starlink
+Group 17-44`) and the body opens with the vehicle and pad (e.g. `Falcon 9
+from SLC-4E, Vandenberg SFB, CA`).
+
+## Logging
+
+Each line goes to stdout and `logs/watcher.log`. By default the log is quiet:
+
+- always: alerts, deliveries, fetch/storage failures, new source warnings
+- tracked (relevant) launches: one line when first seen, when their state
+  changes, and when they leave the schedule
+- hourly: `status: 50 upcoming launches evaluated, 14 tracked; 12 check(s)
+  since last status, 0 failed`
+
+Set `verbose = true` under `[watcher]` to also log every launch evaluation
+each cycle; `once --dry-run` always does. The log rotates to `watcher.log.1`
+at `log_max_size_mb` (default 5), and `docker-compose.yml` caps Docker's own
+copy of stdout the same way.
 
 ## Setup
 
@@ -128,8 +149,25 @@ clang-format -i src/*.cpp include/rocket_watcher/*.hpp tests/*.cpp tests/*.hpp
 cmake -S . -B build -DROCKET_WATCHER_CLANG_TIDY=ON   # tidy runs during compile
 ```
 
-## Raspberry Pi
+## Dev container
 
-The Dockerfile is architecture-independent; on the Pi (64-bit Raspberry Pi
-OS with Docker installed) the same `docker compose up -d --build` builds an
-arm64 image and runs it.
+[.devcontainer/](.devcontainer/devcontainer.json) opens the project in the
+Dockerfile's `dev` stage: GCC 14, CMake, Ninja, libcurl, gcovr, clang-format,
+clang-tidy, and gdb. It is the same toolchain the `test` stage builds on, so
+"Reopen in Container" in VS Code matches what CI-style test builds see.
+
+## Deploying to the Raspberry Pi
+
+Develop and build here; the Pi only runs the finished image. With Docker
+Desktop running and the `pi` ssh alias set up:
+
+```sh
+scripts/deploy.sh
+```
+
+It runs the test stage, builds the arm64 `runtime` image with buildx (QEMU
+emulation, so it is slow), streams it to the Pi with `docker save | ssh
+docker load`, copies `docker-compose.yml`, and restarts with
+`docker compose up -d --no-build`. The Pi has under 1 GB of RAM; compiling
+there (especially the test stage) can exhaust memory, so avoid it.
+`PI_HOST` and `PI_DIR` override the target host and project directory.

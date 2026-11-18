@@ -8,6 +8,68 @@
 
 namespace rocket_watcher {
 
+namespace {
+
+void logWarnings(const std::vector<std::string>& warnings, bool verbose, LogMemory& memory,
+                 const Logger& log) {
+  std::set<std::string> current(warnings.begin(), warnings.end());
+  for (const auto& warning : warnings) {
+    if (verbose || !memory.warnings.contains(warning)) {
+      log("source warning: " + warning);
+    }
+  }
+  memory.warnings = std::move(current);
+}
+
+// Logs relevant launches as they start being tracked, change state, or drop
+// out, and records what was logged. Alerted launches are skipped: their
+// "alert created" line already says what happened.
+void logTrackingChanges(const std::vector<Evaluation>& evaluations, bool quiet, LogMemory& memory,
+                        const Logger& log) {
+  std::map<std::string, LogMemory::TrackedLaunch> current;
+  std::set<std::string> fetched;
+  for (const auto& evaluation : evaluations) {
+    fetched.insert(evaluation.launchKey);
+    if (!evaluation.relevant) continue;
+    auto previous = memory.tracked.find(evaluation.launchKey);
+    if (evaluation.alerted) {
+      if (previous != memory.tracked.end()) current.insert(*previous);
+      continue;
+    }
+    if (quiet) {
+      if (previous == memory.tracked.end()) {
+        log("now tracking: " + evaluation.launchName + ": " + evaluation.note);
+      } else if (previous->second.note != evaluation.note) {
+        log("tracking update: " + evaluation.launchName + ": " + previous->second.note + " -> " +
+            evaluation.note);
+      }
+    }
+    current[evaluation.launchKey] = {evaluation.launchName, evaluation.note};
+  }
+  if (quiet) {
+    for (const auto& [key, launch] : memory.tracked) {
+      if (current.contains(key)) continue;
+      log("no longer tracking: " + launch.name +
+          (fetched.contains(key) ? " (no longer relevant)" : " (left the upcoming schedule)"));
+    }
+  }
+  memory.tracked = std::move(current);
+}
+
+void logStatusIfDue(size_t launchCount, const std::vector<Evaluation>& evaluations,
+                    LogMemory& memory, TimePoint now, const Logger& log) {
+  if (memory.lastStatusAt && now - *memory.lastStatusAt < kStatusLogInterval) return;
+  auto tracked = std::ranges::count_if(evaluations, &Evaluation::relevant);
+  log("status: " + std::to_string(launchCount) + " upcoming launches evaluated, " +
+      std::to_string(tracked) + " tracked; " + std::to_string(memory.checksSinceStatus) +
+      " check(s) since last status, " + std::to_string(memory.failedChecksSinceStatus) + " failed");
+  memory.lastStatusAt = now;
+  memory.checksSinceStatus = 0;
+  memory.failedChecksSinceStatus = 0;
+}
+
+}  // namespace
+
 bool CycleOutcome::anyDeliveryFailed() const {
   return std::ranges::any_of(deliveries,
                              [](const DeliveryResult& delivery) { return !delivery.ok; });
@@ -20,19 +82,24 @@ CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
                       const CycleOptions& options) {
   CycleOutcome outcome;
   TimePoint now = options.nowFn();
+  LogMemory fresh_memory;
+  LogMemory& memory = (options.memory != nullptr) ? *options.memory : fresh_memory;
+  bool log_every_evaluation = options.verbose || options.dryRun;
+  ++memory.checksSinceStatus;
 
   FetchResult fetch;
   try {
     fetch = source.fetch();
   } catch (const std::exception& error) {
     log(std::string("source fetch failed: ") + error.what());
+    ++memory.failedChecksSinceStatus;
     outcome.sourceFailed = true;
     return outcome;
   }
-  for (const auto& warning : fetch.warnings) {
-    log("source warning: " + warning);
+  logWarnings(fetch.warnings, log_every_evaluation, memory, log);
+  if (log_every_evaluation) {
+    log("fetched " + std::to_string(fetch.launches.size()) + " upcoming launches");
   }
-  log("fetched " + std::to_string(fetch.launches.size()) + " upcoming launches");
 
   std::vector<AlertRecord> records;
   try {
@@ -42,15 +109,20 @@ CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
     // so a load failure is treated like a save failure: no Notifications.
     log(std::string("failed to load alert records: ") + error.what() +
         "; sending no notifications this cycle");
+    ++memory.failedChecksSinceStatus;
     outcome.saveFailed = true;
     return outcome;
   }
 
   CycleDecision decision = decideCycle(fetch.launches, records, config.policy(),
                                        config.launchProvider, config.includeTerms, now);
-  for (const auto& line : decision.evaluations) {
-    log("eval: " + line);
+  if (log_every_evaluation) {
+    for (const auto& evaluation : decision.evaluations) {
+      log("eval: " + evaluation.line());
+    }
   }
+  logTrackingChanges(decision.evaluations, /*quiet=*/!log_every_evaluation, memory, log);
+  logStatusIfDue(fetch.launches.size(), decision.evaluations, memory, now, log);
   outcome.alertsCreated = static_cast<int>(decision.alerts.size());
 
   const std::chrono::time_zone* display_zone = config.displayZone();
@@ -65,7 +137,9 @@ CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
       log("dry run: no alerts would be created this cycle");
     }
     for (const auto& [alert, message] : messages) {
-      log("dry run: would send [" + message.title + "] " + message.body +
+      std::string body = message.body;
+      std::ranges::replace(body, '\n', ' ');
+      log("dry run: would send [" + message.title + "] " + body +
           " (matched: " + join(alert.matchedTerms, ", ") + ")");
     }
     log("dry run: would persist " + std::to_string(decision.updatedRecords.size()) +
@@ -81,6 +155,7 @@ CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
     } catch (const StorageError& error) {
       log(std::string("failed to save alert records: ") + error.what() +
           "; sending no notifications this cycle");
+      ++memory.failedChecksSinceStatus;
       outcome.saveFailed = true;
       return outcome;
     }

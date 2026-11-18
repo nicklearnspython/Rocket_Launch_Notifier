@@ -38,6 +38,12 @@ struct Config {
   std::string displayTimezone = "America/Los_Angeles";
   std::string alertRecordsPath = "data/alert_records.json";
   std::string logPath = "logs/watcher.log";
+  // Once the log reaches this size it is moved to "<log>.1" (replacing any
+  // older one) and a fresh log is started.
+  int logMaxSizeMb = 5;
+  // Log every launch evaluation each cycle instead of only changes to
+  // tracked launches plus an hourly status line.
+  bool verbose = false;
 
   AlertPolicy policy() const;
 

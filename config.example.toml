@@ -27,6 +27,11 @@ retention_days = 30
 display_timezone = "America/Los_Angeles"
 alert_records_path = "data/alert_records.json"
 log_path = "logs/watcher.log"
+# The log is rotated to "<log_path>.1" once it reaches this size.
+log_max_size_mb = 5
+# false: log alerts, deliveries, failures, tracked-launch changes, and an
+# hourly status line. true: also log every launch evaluation every cycle.
+verbose = false
 
 [pushover]
 # Name of the environment variable holding the Pushover application token.

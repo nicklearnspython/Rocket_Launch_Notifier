@@ -1,6 +1,8 @@
 // Command-line entry points: once, watch, test-notification.
 #pragma once
 
+#include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -31,6 +33,11 @@ struct CliDeps {
   // Returns false to stop the watch loop; production sleeps and returns true.
   std::function<bool(std::chrono::seconds)> sleepFn;
 };
+
+// Appends one line to the log file. A log already at maxBytes is first
+// moved to "<path>.1" (replacing any older one), so at most two files exist.
+void appendLogLine(const std::filesystem::path& path, const std::string& line,
+                   std::uintmax_t maxBytes);
 
 // argv-style arguments without the program name. Returns the exit code:
 // 0 success, 1 cycle/delivery failure, 2 config or usage error.

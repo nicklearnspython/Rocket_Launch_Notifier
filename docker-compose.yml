@@ -1,5 +1,8 @@
 services:
   rocket-watcher:
+    # scripts/deploy.sh builds this image elsewhere and loads it here, so the
+    # Pi never compiles; `docker compose up --build` still works as a fallback.
+    image: rocket-watcher:latest
     build:
       context: .
       target: runtime
@@ -9,3 +12,10 @@ services:
       - ./config.toml:/app/config.toml:ro
       - ./data:/app/data
       - ./logs:/app/logs
+    # Cap Docker's own copy of stdout (the app writes the same lines to
+    # logs/watcher.log, which it rotates itself).
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

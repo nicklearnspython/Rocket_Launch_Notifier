@@ -27,6 +27,12 @@ std::vector<AlertKind> alertKinds(const CycleDecision& decision) {
   return kinds;
 }
 
+std::vector<std::string> evaluationLines(const CycleDecision& decision) {
+  std::vector<std::string> lines;
+  for (const auto& evaluation : decision.evaluations) lines.push_back(evaluation.line());
+  return lines;
+}
+
 LaunchFacts goPreciseFacts(const Launch& launch) {
   return LaunchFacts{launch.launchTime, TimingPrecision::kPrecise, LaunchStatus::kGo};
 }
@@ -66,7 +72,7 @@ TEST(CountdownAlerts, BeyondScheduleLookaheadIsSilent) {
   launch.launchTime = kNow + 31h;
   CycleDecision decision = decide({launch});
   EXPECT_THAT(decision.alerts, IsEmpty());
-  EXPECT_THAT(decision.evaluations, Contains(HasSubstr("lookahead")));
+  EXPECT_THAT(evaluationLines(decision), Contains(HasSubstr("lookahead")));
 }
 
 TEST(CountdownAlerts, PassedLaunchTimeIsSilent) {
@@ -235,12 +241,73 @@ TEST(TimingNowImpreciseCorrections, ImpreciseCorrectionNotRepeated) {
   EXPECT_THAT(decide({launch}, {record}).alerts, IsEmpty());
 }
 
+TEST(CountdownRearm, TimeChangedCorrectionRearmsCountdownAlerts) {
+  Launch launch = makeLaunch();
+  launch.launchTime = kNow + 45min;
+  AlertRecord record = makeRecord(
+      launch,
+      std::vector<SentAlert>{{AlertKind::kLaunchSoon, kNow - 25h, std::nullopt},
+                             {AlertKind::kLaunchImminent, kNow - 24h, std::nullopt},
+                             {AlertKind::kCorrection, kNow - 23h, CorrectionReason::kTimeChanged}});
+  EXPECT_THAT(alertKinds(decide({launch}, {record})), ElementsAre(AlertKind::kLaunchSoon));
+}
+
+TEST(CountdownRearm, NoGoCorrectionRearmsCountdownAlerts) {
+  Launch launch = makeLaunch();
+  launch.launchTime = kNow + 5min;
+  AlertRecord record = makeRecord(
+      launch,
+      std::vector<SentAlert>{{AlertKind::kLaunchImminent, kNow - 1h, std::nullopt},
+                             {AlertKind::kCorrection, kNow - 50min, CorrectionReason::kNoGo}});
+  record.lastFacts = LaunchFacts{launch.launchTime, TimingPrecision::kPrecise, LaunchStatus::kNoGo};
+  EXPECT_THAT(alertKinds(decide({launch}, {record})), ElementsAre(AlertKind::kLaunchImminent));
+}
+
+TEST(CountdownRearm, AlertsSentAfterTheCorrectionStillSuppressRepeats) {
+  Launch launch = makeLaunch();
+  launch.launchTime = kNow + 40min;
+  AlertRecord record = makeRecord(
+      launch,
+      std::vector<SentAlert>{{AlertKind::kLaunchSoon, kNow - 25h, std::nullopt},
+                             {AlertKind::kCorrection, kNow - 24h, CorrectionReason::kTimeChanged},
+                             {AlertKind::kLaunchSoon, kNow - 5min, std::nullopt}});
+  EXPECT_THAT(decide({launch}, {record}).alerts, IsEmpty());
+}
+
+// Replays the Starship Flight 13 pattern: countdown, scrub (status unknown),
+// new date announced, then the real attempt a week later.
+TEST(CountdownRearm, ScrubbedLaunchGetsFullCountdownOnNextAttempt) {
+  Launch launch = makeLaunch();
+  TimePoint first_attempt = kNow + 1h;
+  TimePoint second_attempt = first_attempt + std::chrono::days{7};
+  std::vector<AlertRecord> records;
+  std::vector<AlertKind> sent;
+  auto cycle = [&](TimePoint now, std::optional<TimePoint> netTime, LaunchStatus status) {
+    launch.launchTime = netTime;
+    launch.status = status;
+    CycleDecision decision = decide({launch}, records, now);
+    records = decision.updatedRecords;
+    for (const auto& alert : decision.alerts) sent.push_back(alert.kind);
+  };
+  cycle(first_attempt - 55min, first_attempt, LaunchStatus::kGo);
+  cycle(first_attempt - 8min, first_attempt, LaunchStatus::kGo);
+  cycle(first_attempt + 5min, first_attempt, LaunchStatus::kUnknown);  // scrubbed
+  cycle(first_attempt + 12h, second_attempt, LaunchStatus::kGo);       // new date
+  cycle(second_attempt - 55min, second_attempt, LaunchStatus::kGo);
+  cycle(second_attempt - 8min, second_attempt, LaunchStatus::kGo);
+  EXPECT_THAT(
+      sent, ElementsAre(AlertKind::kLaunchSoon, AlertKind::kLaunchImminent, AlertKind::kCorrection,
+                        AlertKind::kLaunchSoon, AlertKind::kLaunchImminent));
+}
+
 TEST(RelevanceGate, IrrelevantLaunchNeverAlertsAndIsExplained) {
   Launch launch = makeLaunch();
   launch.provider = "Rocket Lab";
   CycleDecision decision = decide({launch});
   EXPECT_THAT(decision.alerts, IsEmpty());
-  EXPECT_THAT(decision.evaluations, Contains(HasSubstr("not relevant")));
+  EXPECT_THAT(evaluationLines(decision), Contains(HasSubstr("not relevant")));
+  ASSERT_EQ(decision.evaluations.size(), 1u);
+  EXPECT_FALSE(decision.evaluations[0].relevant);
 }
 
 TEST(RelevanceGate, RelevantLaunchEvaluationIsLoggedBeforeEligibility) {
@@ -248,7 +315,11 @@ TEST(RelevanceGate, RelevantLaunchEvaluationIsLoggedBeforeEligibility) {
   launch.launchTime = kNow + 20h;
   CycleDecision decision = decide({launch});
   EXPECT_THAT(decision.alerts, IsEmpty());
-  EXPECT_THAT(decision.evaluations, Contains(HasSubstr("no unsent countdown alert eligible")));
+  EXPECT_THAT(evaluationLines(decision), Contains(HasSubstr("no unsent countdown alert eligible")));
+  ASSERT_EQ(decision.evaluations.size(), 1u);
+  EXPECT_TRUE(decision.evaluations[0].relevant);
+  EXPECT_FALSE(decision.evaluations[0].alerted);
+  EXPECT_EQ(decision.evaluations[0].launchKey, "ll2:abc-123");
 }
 
 TEST(AlertRecordUpdates, NewAlertCreatesRecordWithFactsAndSentAlert) {
