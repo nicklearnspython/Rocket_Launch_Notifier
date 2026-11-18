@@ -146,4 +146,24 @@ std::string formatDisplayShort(TimePoint time, const std::chrono::time_zone* zon
   return buffer.data() + localAbbrev(time, zone);
 }
 
+std::string formatDisplayWeekday(TimePoint time, const std::chrono::time_zone* zone) {
+  static constexpr std::array<const char*, 7> kWeekdays = {"Sun", "Mon", "Tue", "Wed",
+                                                           "Thu", "Fri", "Sat"};
+  static constexpr std::array<const char*, 12> kMonths = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  auto local_day = std::chrono::floor<std::chrono::days>(zone->to_local(time));
+  std::chrono::year_month_day ymd{local_day};
+  unsigned weekday = std::chrono::weekday{local_day}.c_encoding();
+  return std::string(kWeekdays.at(weekday)) + " " +
+         kMonths.at(static_cast<unsigned>(ymd.month()) - 1) + " " +
+         std::to_string(static_cast<unsigned>(ymd.day()));
+}
+
+std::string formatDisplayShortHour(TimePoint time, const std::chrono::time_zone* zone) {
+  CivilTime c = splitInZone(time, zone);
+  std::array<char, 16> buffer{};
+  std::snprintf(buffer.data(), buffer.size(), "%02ld:00 ", c.hour);
+  return buffer.data() + localAbbrev(time, zone);
+}
+
 }  // namespace rocket_watcher

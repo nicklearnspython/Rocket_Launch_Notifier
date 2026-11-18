@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <string>
+#include <vector>
 
 #include "rocket_watcher/domain.hpp"
 
@@ -23,5 +24,14 @@ struct Message {
 };
 
 Message formatAlert(const Alert& alert, const std::chrono::time_zone* displayZone);
+
+// Pushover rejects message bodies over 1024 characters.
+inline constexpr size_t kMaxMessageBodyLength = 1024;
+
+// The Weekly Digest: one entry per launch (soonest first, as given) with day,
+// time, Launch Status, and vehicle/site. Entries that would overflow
+// kMaxMessageBodyLength are summarized as "...and N more".
+Message formatDigest(const std::vector<Launch>& launches, int lookaheadDays,
+                     const std::chrono::time_zone* displayZone);
 
 }  // namespace rocket_watcher

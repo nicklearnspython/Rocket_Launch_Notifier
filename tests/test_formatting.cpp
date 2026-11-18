@@ -177,5 +177,67 @@ TEST(Formatting, WinterTimeUsesStandardTimezoneName) {
   EXPECT_THAT(message.body, HasSubstr("PST"));
 }
 
+Launch digestLaunch(const std::string& id, TimePoint time) {
+  Launch launch = makeLaunch();
+  launch.sourceLaunchId = id;
+  launch.launchTime = time;
+  launch.vehicle = "Falcon 9";
+  launch.padName = "Space Launch Complex 4E, Vandenberg SFB, CA, USA";
+  return launch;
+}
+
+TEST(DigestFormatting, ListsEachLaunchWithDayTimeAndStatus) {
+  Launch go = digestLaunch("go", kNow + 28h + 30min);  // Wed 15:30 PDT
+  Launch hold = digestLaunch("hold", kNow + 3 * 24h);  // Fri 11:00 PDT
+  hold.name = "Starship | Flight 12";
+  hold.vehicle = "Starship";
+  hold.padName = "Orbital Launch Mount A, Starbase, TX, USA";
+  hold.status = LaunchStatus::kNoGo;
+  hold.precision = TimingPrecision::kHour;
+  Message message = formatDigest({go, hold}, 7, la());
+  EXPECT_EQ(message.title, "This week: 2 tracked launches");
+  EXPECT_EQ(message.alertKind, "weekly_digest");
+  EXPECT_EQ(message.body,
+            "Starlink Group 12-34\n"
+            "Wed Jun 10, 15:30 PDT · go\n"
+            "Falcon 9 from SLC-4E, Vandenberg SFB, CA\n"
+            "\n"
+            "Flight 12\n"
+            "Fri Jun 12, around 11:00 PDT · on hold\n"
+            "Starship from Orbital Launch Mount A, Starbase, TX\n"
+            "\n"
+            "Times often slip; countdown alerts will follow.");
+}
+
+TEST(DigestFormatting, ImpreciseTimingShowsTentativeDate) {
+  Launch launch = digestLaunch("tbd", kNow + 24h);
+  launch.precision = TimingPrecision::kImprecise;
+  launch.status = LaunchStatus::kUnknown;
+  Message message = formatDigest({launch}, 7, la());
+  EXPECT_EQ(message.title, "This week: 1 tracked launch");
+  EXPECT_THAT(message.body, HasSubstr("Wed Jun 10 (date tentative) · not yet confirmed\n"));
+}
+
+TEST(DigestFormatting, EmptyWeekSaysSo) {
+  Message message = formatDigest({}, 7, la());
+  EXPECT_EQ(message.title, "This week: no tracked launches");
+  EXPECT_THAT(message.body, HasSubstr("No tracked launches in the next 7 days"));
+}
+
+TEST(DigestFormatting, NonWeekLookaheadNamesTheDays) {
+  EXPECT_EQ(formatDigest({}, 10, la()).title, "Next 10 days: no tracked launches");
+}
+
+TEST(DigestFormatting, LongListIsTruncatedToFitPushover) {
+  std::vector<Launch> launches;
+  for (int i = 0; i < 30; ++i) {
+    launches.push_back(digestLaunch(std::to_string(i), kNow + std::chrono::hours{i}));
+  }
+  Message message = formatDigest(launches, 7, la());
+  EXPECT_EQ(message.title, "This week: 30 tracked launches");
+  EXPECT_LE(message.body.size(), kMaxMessageBodyLength);
+  EXPECT_THAT(message.body, HasSubstr(" more\n\nTimes often slip"));
+}
+
 }  // namespace
 }  // namespace rocket_watcher::testing

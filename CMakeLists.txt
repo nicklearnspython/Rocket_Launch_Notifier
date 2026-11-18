@@ -36,6 +36,7 @@ add_library(rocket_watcher_lib
   src/config.cpp
   src/core.cpp
   src/curl_http.cpp
+  src/digest.cpp
   src/domain.cpp
   src/formatting.cpp
   src/launch_library.cpp
@@ -77,6 +78,7 @@ if(ROCKET_WATCHER_BUILD_TESTS)
     tests/test_cli.cpp
     tests/test_config.cpp
     tests/test_core.cpp
+    tests/test_digest.cpp
     tests/test_formatting.cpp
     tests/test_launch_library.cpp
     tests/test_orchestration.cpp

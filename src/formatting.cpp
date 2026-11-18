@@ -99,6 +99,44 @@ Message formatCorrection(const Alert& alert, const std::chrono::time_zone* displ
                  alert.launch.key(), name};
 }
 
+std::string digestStatus(LaunchStatus status) {
+  switch (status) {
+    case LaunchStatus::kGo:
+      return "go";
+    case LaunchStatus::kNoGo:
+      return "on hold";
+    case LaunchStatus::kEnded:
+      return "ended";
+    case LaunchStatus::kUnknown:
+      break;
+  }
+  return "not yet confirmed";
+}
+
+// "Tue Sep 29, 15:30 PDT", "Tue Sep 29, around 15:00 PDT", or
+// "Tue Sep 29 (date tentative)" depending on Timing Precision.
+std::string digestWhen(const Launch& launch, const std::chrono::time_zone* displayZone) {
+  if (!launch.launchTime) return "date unknown";
+  TimePoint time = *launch.launchTime;
+  std::string day = formatDisplayWeekday(time, displayZone);
+  switch (launch.precision) {
+    case TimingPrecision::kPrecise:
+      return day + ", " + formatDisplayShort(time, displayZone);
+    case TimingPrecision::kHour:
+      return day + ", around " + formatDisplayShortHour(time, displayZone);
+    case TimingPrecision::kImprecise:
+    case TimingPrecision::kUnknown:
+      break;
+  }
+  return day + " (date tentative)";
+}
+
+// "Flight 12\nTue Sep 29, 15:30 PDT · go\nStarship from Starbase, TX\n"
+std::string digestEntry(const Launch& launch, const std::chrono::time_zone* displayZone) {
+  return shortName(launch) + "\n" + digestWhen(launch, displayZone) + " · " +
+         digestStatus(launch.status) + "\n" + vehicleLine(launch);
+}
+
 }  // namespace
 
 Message formatAlert(const Alert& alert, const std::chrono::time_zone* displayZone) {
@@ -129,6 +167,36 @@ Message formatAlert(const Alert& alert, const std::chrono::time_zone* displayZon
 
   return Message{title, vehicleLine(alert.launch) + body, toString(alert.kind), alert.launch.key(),
                  name};
+}
+
+Message formatDigest(const std::vector<Launch>& launches, int lookaheadDays,
+                     const std::chrono::time_zone* displayZone) {
+  std::string period =
+      (lookaheadDays == 7) ? "This week" : "Next " + std::to_string(lookaheadDays) + " days";
+  if (launches.empty()) {
+    return Message{period + ": no tracked launches",
+                   "No tracked launches in the next " + std::to_string(lookaheadDays) +
+                       " days. Countdown alerts still go out if one is scheduled.",
+                   "weekly_digest", "digest", "weekly digest"};
+  }
+
+  const std::string footer = "Times often slip; countdown alerts will follow.";
+  std::string title = period + ": " + std::to_string(launches.size()) + " tracked launch" +
+                      (launches.size() == 1 ? "" : "es");
+  auto more_line = [](size_t count) { return "...and " + std::to_string(count) + " more\n\n"; };
+  std::string body;
+  for (size_t i = 0; i < launches.size(); ++i) {
+    std::string entry = digestEntry(launches[i], displayZone) + "\n";
+    size_t left_after = launches.size() - i - 1;
+    // Keep room for a later "...and N more" line unless this is the last entry.
+    size_t reserve = (left_after > 0) ? more_line(left_after).size() : 0;
+    if (body.size() + entry.size() + reserve + footer.size() > kMaxMessageBodyLength) {
+      body += more_line(launches.size() - i);
+      break;
+    }
+    body += entry;
+  }
+  return Message{title, body + footer, "weekly_digest", "digest", "weekly digest"};
 }
 
 }  // namespace rocket_watcher

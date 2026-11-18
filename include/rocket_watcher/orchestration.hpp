@@ -8,6 +8,11 @@
 // logged; tracked (relevant) launches are logged only when they appear,
 // change, or drop out; and a one-line status is logged hourly. Verbose mode
 // and dry runs log every launch evaluation instead.
+//
+// After alerts, a cycle also sends the Weekly Digest when one is due (see
+// digest.hpp), reusing the cycle's fetch. Like Alert Records, the digest
+// slot is saved before sending, so a failed save sends nothing and a failed
+// delivery is not retried.
 #pragma once
 
 #include <chrono>
@@ -20,6 +25,7 @@
 
 #include "rocket_watcher/channel.hpp"
 #include "rocket_watcher/config.hpp"
+#include "rocket_watcher/digest.hpp"
 #include "rocket_watcher/source.hpp"
 #include "rocket_watcher/storage.hpp"
 
@@ -31,6 +37,7 @@ struct CycleOutcome {
   bool sourceFailed = false;
   bool saveFailed = false;
   int alertsCreated = 0;
+  bool digestSent = false;
   std::vector<DeliveryResult> deliveries;
 
   bool anyDeliveryFailed() const;
@@ -59,10 +66,19 @@ struct CycleOptions {
   bool verbose = false;
   // Null means a fresh memory for this cycle only (e.g. `once`).
   LogMemory* memory = nullptr;
+  // Null disables the Weekly Digest for this cycle.
+  DigestStateStore* digestStore = nullptr;
 };
 
 CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
                       NotificationChannel& channel, const Config& config, const Logger& log,
                       const CycleOptions& options = {});
+
+// Sends `message` to every recipient, logging each outcome.
+std::vector<DeliveryResult> deliverToAll(NotificationChannel& channel, const Config& config,
+                                         const Message& message, const Logger& log);
+
+// The Weekly Digest for `launches` as of `now`, per config.
+Message buildDigest(const std::vector<Launch>& launches, const Config& config, TimePoint now);
 
 }  // namespace rocket_watcher

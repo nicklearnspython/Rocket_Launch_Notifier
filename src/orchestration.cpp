@@ -68,7 +68,65 @@ void logStatusIfDue(size_t launchCount, const std::vector<Evaluation>& evaluatio
   memory.failedChecksSinceStatus = 0;
 }
 
+// Sends the Weekly Digest if one is due. Failures are logged and reported
+// in `outcome`; they never affect the cycle's Alerts.
+void sendDigestIfDue(const std::vector<Launch>& launches, DigestStateStore& store,
+                     NotificationChannel& channel, const Config& config, const Logger& log,
+                     TimePoint now, bool dryRun, CycleOutcome& outcome) {
+  std::optional<TimePoint> last_sent;
+  try {
+    last_sent = store.loadLastSentSlot();
+  } catch (const StorageError& error) {
+    // Without the last sent slot, a digest could repeat every cycle.
+    log(std::string("failed to load digest state: ") + error.what() + "; skipping weekly digest");
+    outcome.saveFailed = true;
+    return;
+  }
+  std::optional<TimePoint> slot =
+      dueDigestSlot(now, last_sent, config.digest, config.displayZone());
+  if (!slot) return;
+
+  Message message = buildDigest(launches, config, now);
+  if (dryRun) {
+    std::string body = message.body;
+    std::ranges::replace(body, '\n', ' ');
+    log("dry run: weekly digest due; would send [" + message.title + "] " + body);
+    return;
+  }
+  try {
+    store.saveLastSentSlot(*slot);
+  } catch (const StorageError& error) {
+    log(std::string("failed to save digest state: ") + error.what() +
+        "; not sending weekly digest");
+    outcome.saveFailed = true;
+    return;
+  }
+  log("weekly digest: [" + message.title + "]");
+  auto deliveries = deliverToAll(channel, config, message, log);
+  outcome.deliveries.insert(outcome.deliveries.end(), deliveries.begin(), deliveries.end());
+  outcome.digestSent = true;
+}
+
 }  // namespace
+
+std::vector<DeliveryResult> deliverToAll(NotificationChannel& channel, const Config& config,
+                                         const Message& message, const Logger& log) {
+  std::vector<DeliveryResult> results;
+  for (const auto& recipient : config.recipients) {
+    DeliveryResult result = channel.send(message, recipient.name);
+    std::string status = result.ok ? "delivered" : "DELIVERY FAILED";
+    log(status + " to " + recipient.name + ": " + result.detail + " [" + message.title + "]");
+    results.push_back(result);
+  }
+  return results;
+}
+
+Message buildDigest(const std::vector<Launch>& launches, const Config& config, TimePoint now) {
+  std::vector<Launch> selected =
+      selectDigestLaunches(launches, config.launchProvider, config.includeTerms, now,
+                           std::chrono::days{config.digest.lookaheadDays});
+  return formatDigest(selected, config.digest.lookaheadDays, config.displayZone());
+}
 
 bool CycleOutcome::anyDeliveryFailed() const {
   return std::ranges::any_of(deliveries,
@@ -85,6 +143,7 @@ CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
   LogMemory fresh_memory;
   LogMemory& memory = (options.memory != nullptr) ? *options.memory : fresh_memory;
   bool log_every_evaluation = options.verbose || options.dryRun;
+  DigestStateStore* digest_store = config.digest.enabled ? options.digestStore : nullptr;
   ++memory.checksSinceStatus;
 
   FetchResult fetch;
@@ -144,6 +203,9 @@ CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
     }
     log("dry run: would persist " + std::to_string(decision.updatedRecords.size()) +
         " alert record(s); no notifications sent, no records or logs written");
+    if (digest_store != nullptr) {
+      sendDigestIfDue(fetch.launches, *digest_store, channel, config, log, now, true, outcome);
+    }
     return outcome;
   }
 
@@ -164,12 +226,12 @@ CycleOutcome runCycle(LaunchScheduleSource& source, AlertRecordStore& store,
 
   for (const auto& [alert, message] : messages) {
     log("alert created: [" + message.title + "] (matched: " + join(alert.matchedTerms, ", ") + ")");
-    for (const auto& recipient : config.recipients) {
-      DeliveryResult result = channel.send(message, recipient.name);
-      outcome.deliveries.push_back(result);
-      std::string status = result.ok ? "delivered" : "DELIVERY FAILED";
-      log(status + " to " + recipient.name + ": " + result.detail + " [" + message.title + "]");
-    }
+    auto deliveries = deliverToAll(channel, config, message, log);
+    outcome.deliveries.insert(outcome.deliveries.end(), deliveries.begin(), deliveries.end());
+  }
+
+  if (digest_store != nullptr) {
+    sendDigestIfDue(fetch.launches, *digest_store, channel, config, log, now, false, outcome);
   }
   return outcome;
 }

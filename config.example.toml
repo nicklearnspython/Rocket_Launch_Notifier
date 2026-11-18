@@ -33,6 +33,17 @@ log_max_size_mb = 5
 # hourly status line. true: also log every launch evaluation every cycle.
 verbose = false
 
+[digest]
+# A weekly heads-up of tracked launches, sent to every recipient.
+enabled = true
+# Day and 24-hour time, in watcher.display_timezone.
+day = "Sunday"
+time = "20:00"
+# Launches in the next this-many days are listed.
+lookahead_days = 7
+# Remembers which week's digest was already sent.
+state_path = "data/digest_state.json"
+
 [pushover]
 # Name of the environment variable holding the Pushover application token.
 token_env = "PUSHOVER_TOKEN"
